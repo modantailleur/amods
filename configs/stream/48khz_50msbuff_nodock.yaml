@@ -1,0 +1,15 @@
+conc_multiplier: 1.0
+
+# Gains (stream playback / recording)
+monitor_gain: 0.0      # mic in headphones (0.0 = you don't hear your voice, only the concealer)
+record_mic_gain: 1.0   # mic in stream_mix.wav (1.0 = record full mic)
+max_level: 1.0
+
+# Stream config
+sr: 48000
+channels_in: 1
+channels_out: 2
+device_in: default           # 15 when my computer is used alone - 15 default, ALSA (64 in, 64 out); 4 when used with dock -  4 sof-hda-dsp: - (hw:0,6), ALSA (4 in, 0 out)
+device_out: default         # 15 when my computer is used alone - 15 default, ALSA (64 in, 64 out); 17 when used with dock -  17 default, ALSA (64 in, 64 out)
+dtype: "float32"
+buffer_duration: 0.050

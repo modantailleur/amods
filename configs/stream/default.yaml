@@ -1,0 +1,13 @@
+conc_multiplier: 1.0
+monitor_gain: 0.0
+record_mic_gain: 1.0
+max_level: 1.0
+sr: 48000
+channels_in: 1
+channels_out: 1
+device_in: 18
+device_out: 18
+dtype: float32
+buffer_duration: 0.05
+input_latency: high
+output_latency: 0.15

@@ -1,0 +1,13 @@
+concealer_type: granspeechmask
+concealer_vad_config: default_concealer.yaml
+memory_maxlen: 100
+min_memory_to_conceal: 20
+max_countdown_reuse: 10
+max_concealer_distance_to_buffer: 5
+concealer_duration: 0.3
+concealing_min_timeout_ratio: 0.6
+concealing_max_timeout_ratio: 1.0
+fade_duration: 0.05
+random_reverse: false
+denoise: true
+decision_win: 0.3

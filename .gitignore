@@ -1,0 +1,17 @@
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+
+# Local test/output data (not part of the installable package)
+audios/
+output/
