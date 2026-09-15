@@ -3,6 +3,10 @@
 A framework for real-time algorithms that make nearby speech unintelligible to
 listeners.
 
+This work is supported by the French National Research Agency (ANR) under the
+[ReNAR project](https://anr.fr/Projet-ANR-23-CE33-0012) (ANR-23-CE33-0012),
+*"Augmentation des Environnements Sonores pour la Réduction de la Gêne"*.
+
 ## Background
 
 Intelligible background speech is one of the most disruptive sources of noise in shared and open-plan offices. It can increase stress and annoyance, disrupt social interactions, and reduce work performance. Staying focused around distracting conversations is a common concern when working in a shared space.
