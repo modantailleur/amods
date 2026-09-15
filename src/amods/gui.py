@@ -9,6 +9,7 @@ repository, otherwise ``~/.amods/configs/``), so the ``amods`` CLI picks up
 whatever was last configured here.
 """
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +32,18 @@ from .stream import Stream
 OUTPUT_DIR = "./output/"
 
 WEBRTC_DEFAULT_LOGIT_THRESHOLD = 0.5
+
+# Level meters: RMS-in-dBFS is mapped onto this range to get a 0-100 bar
+# value. Chosen so that normal speech (roughly -25 to -15 dBFS) sits in the
+# upper half of the bar rather than pinned near either end.
+LEVEL_METER_DB_RANGE = (-55.0, -5.0)
+LEVEL_METER_MIN_UPDATE_INTERVAL = 0.05  # seconds; caps bar redraws to ~20/s
+
+# "Ping" test tone played through the selected speaker.
+PING_FREQUENCY_HZ = 440.0
+PING_DURATION_S = 0.7
+PING_FADE_S = 0.05
+PING_AMPLITUDE = 0.4
 
 
 def _writable_config_path(component, name):
@@ -94,6 +107,22 @@ class ConcealerGUI:
         self.concealer_stream = None
         self._refresh_job = None
 
+        # Idle mic-level preview: a lightweight input-only stream open
+        # whenever the real concealer isn't running, so the level bar next to
+        # the mic selector reacts before the user presses Start.
+        self._input_monitor = None
+        self._ping_stream = None
+        self._last_level_ts = {"in": 0.0, "out": 0.0}
+
+        style = ttk.Style()
+        style.theme_use("clam")  # 'clam' reliably honors the custom colors below on every platform
+        style.configure(
+            "Level.Horizontal.TProgressbar",
+            troughcolor="#e3e6ea", bordercolor="#c7cdd6",
+            background="#2f6fed", lightcolor="#2f6fed", darkcolor="#2f6fed",
+            thickness=12,
+        )
+
         self.in_devices = list_devices("in")
         self.out_devices = list_devices("out")
         default_in, default_out = sd.default.device
@@ -116,7 +145,13 @@ class ConcealerGUI:
         )
         self.in_combo.grid(row=0, column=1, **pad)
         self._preselect(self.in_combo, self.in_devices, default_in)
-        self.in_combo.bind("<<ComboboxSelected>>", lambda e: self._update_warnings())
+        self.in_combo.bind("<<ComboboxSelected>>", lambda e: self._on_input_device_change())
+
+        self.in_level_var = tk.DoubleVar(value=0)
+        ttk.Progressbar(
+            devices_frame, orient="horizontal", mode="determinate", length=90,
+            maximum=100, variable=self.in_level_var, style="Level.Horizontal.TProgressbar",
+        ).grid(row=0, column=2, padx=(0, 10), pady=6)
 
         ttk.Label(devices_frame, text="Speaker (out)").grid(row=1, column=0, sticky="w", **pad)
         self.out_var = tk.StringVar()
@@ -128,6 +163,15 @@ class ConcealerGUI:
         self._preselect(self.out_combo, self.out_devices, default_out)
         self._avoid_same_device_default()
         self.out_combo.bind("<<ComboboxSelected>>", lambda e: self._update_warnings())
+
+        self.out_level_var = tk.DoubleVar(value=0)
+        ttk.Progressbar(
+            devices_frame, orient="horizontal", mode="determinate", length=90,
+            maximum=100, variable=self.out_level_var, style="Level.Horizontal.TProgressbar",
+        ).grid(row=1, column=2, padx=(0, 10), pady=6)
+
+        self.ping_btn = ttk.Button(devices_frame, text="Ping", width=6, command=self._on_ping)
+        self.ping_btn.grid(row=1, column=3, padx=(0, 10), pady=6)
 
         # Warnings (Larsen-effect feedback risk + same-device duplex crash risk)
         self.feedback_warning = tk.Label(
@@ -199,6 +243,19 @@ class ConcealerGUI:
 
         self._on_vad_type_change()
         self._update_warnings()
+        self._start_input_monitor()
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        """Release any open audio stream before the window actually closes."""
+        self._stop_input_monitor()
+        if self._ping_stream is not None:
+            try:
+                self._ping_stream.abort()
+                self._ping_stream.close()
+            except Exception:
+                pass
+        self.root.destroy()
 
     # ── Device selection helpers ─────────────────────────────────────────
 
@@ -253,6 +310,136 @@ class ConcealerGUI:
             )
         else:
             self.feedback_warning.config(text="")
+
+    def _on_input_device_change(self):
+        """React to the mic combo changing: refresh warnings and point the idle level monitor at the new device."""
+        self._update_warnings()
+        self._restart_input_monitor()
+
+    # ── Level meters ──────────────────────────────────────────────────────
+
+    def _push_level(self, which, var, block):
+        """
+        Update ``var`` (an ``in``/``out`` level bar, 0-100) from one audio
+        block. Runs on PortAudio's callback thread, so the actual widget
+        update is marshalled onto the Tk main thread via ``after``; updates
+        are throttled to ``LEVEL_METER_MIN_UPDATE_INTERVAL`` since callbacks
+        fire far more often than the bar needs to redraw.
+        """
+        now = time.monotonic()
+        if now - self._last_level_ts[which] < LEVEL_METER_MIN_UPDATE_INTERVAL:
+            return
+        self._last_level_ts[which] = now
+
+        rms = float(np.sqrt(np.mean(block.astype(np.float64) ** 2)))
+        db = 20.0 * np.log10(rms + 1e-9)
+        lo, hi = LEVEL_METER_DB_RANGE
+        level = float(np.clip(np.interp(db, [lo, hi], [0.0, 100.0]), 0.0, 100.0))
+        try:
+            self.root.after(0, var.set, level)
+        except RuntimeError:
+            # A stream can fire one last callback while it's being torn down
+            # (e.g. right as Start/Ping closes the idle monitor) - by then the
+            # window may already be gone; the level update itself is moot.
+            pass
+
+    def _start_input_monitor(self):
+        """Open a lightweight input-only stream on the selected mic so its level bar reacts even while idle."""
+        if self._input_monitor is not None:
+            return
+        device_in = self._selected_index(self.in_combo, self.in_devices)
+        if device_in is None:
+            return
+        try:
+            self._input_monitor = sd.InputStream(
+                channels=1, device=device_in,
+                callback=lambda indata, frames, time_info, status: self._push_level("in", self.in_level_var, indata),
+            )
+            self._input_monitor.start()
+        except Exception:
+            # Best-effort preview only - if the device can't be opened here
+            # (e.g. it's busy elsewhere), just leave the bar flat at 0.
+            self._input_monitor = None
+            self.in_level_var.set(0)
+
+    def _stop_input_monitor(self):
+        """Close the idle mic-level stream, e.g. before the real concealer stream opens the same device."""
+        if self._input_monitor is not None:
+            try:
+                self._input_monitor.stop()
+                self._input_monitor.close()
+            except Exception:
+                pass
+            self._input_monitor = None
+        self.in_level_var.set(0)
+
+    def _restart_input_monitor(self):
+        self._stop_input_monitor()
+        self._start_input_monitor()
+
+    # ── Ping (speaker test tone) ─────────────────────────────────────────
+
+    def _on_ping(self):
+        """Play a short fade-in/fade-out sine through the selected speaker, animating its level bar."""
+        if self._ping_stream is not None:
+            return  # already playing
+        device_out = self._selected_index(self.out_combo, self.out_devices)
+        if device_out is None:
+            messagebox.showerror("Granular Speech Masker", "Select a speaker first.")
+            return
+
+        # Avoid the same simultaneous-input+output risk _update_warnings warns
+        # about, in case mic and speaker happen to be the same device: release
+        # the idle mic monitor for the duration of the test tone.
+        self._stop_input_monitor()
+        self.ping_btn.config(state="disabled")
+        try:
+            self._play_ping(device_out)
+        except Exception as e:
+            messagebox.showerror("Granular Speech Masker", f"Could not play test tone: {e}")
+            self.ping_btn.config(state="normal")
+            self._start_input_monitor()
+
+    def _play_ping(self, device_out):
+        """Build and start playback of the fade-in/fade-out test tone; cleanup happens in its finished_callback."""
+        sr = int(sd.query_devices(device_out)["default_samplerate"])
+        n_samples = int(sr * PING_DURATION_S)
+        t = np.arange(n_samples) / sr
+        tone = (PING_AMPLITUDE * np.sin(2 * np.pi * PING_FREQUENCY_HZ * t)).astype(np.float32)
+
+        fade_n = max(1, int(sr * PING_FADE_S))
+        ramp = np.linspace(0.0, 1.0, fade_n, dtype=np.float32)
+        tone[:fade_n] *= ramp
+        tone[-fade_n:] *= ramp[::-1]
+
+        position = {"i": 0}
+
+        def callback(outdata, frames, time_info, status):
+            start = position["i"]
+            end = min(start + frames, n_samples)
+            chunk = tone[start:end]
+            outdata[: len(chunk), 0] = chunk
+            if len(chunk) < frames:
+                outdata[len(chunk):, 0] = 0.0
+            self._push_level("out", self.out_level_var, outdata[: len(chunk)] if len(chunk) else outdata)
+            position["i"] = end
+            if end >= n_samples:
+                raise sd.CallbackStop()
+
+        def on_finished():
+            def _reset():
+                self._ping_stream = None
+                self.out_level_var.set(0)
+                self.ping_btn.config(state="normal")
+                self._start_input_monitor()
+            self.root.after(0, _reset)
+
+        stream = sd.OutputStream(
+            samplerate=sr, channels=1, device=device_out,
+            callback=callback, finished_callback=on_finished,
+        )
+        self._ping_stream = stream
+        stream.start()
 
     # ── VAD threshold / aggressiveness slider ────────────────────────────
 
@@ -324,6 +511,19 @@ class ConcealerGUI:
                 "systems. Starting anyway.",
             )
 
+        # Release the idle mic-level preview stream so the real InputStream
+        # below can open the same device, and cut off a still-playing Ping
+        # test tone so it doesn't hold the speaker device open too.
+        self._stop_input_monitor()
+        if self._ping_stream is not None:
+            try:
+                self._ping_stream.abort()
+                self._ping_stream.close()
+            except Exception:
+                pass
+            self._ping_stream = None
+            self.out_level_var.set(0)
+
         try:
             self._write_configs(device_in, device_out)
             self.concealer_stream = Stream(
@@ -332,6 +532,15 @@ class ConcealerGUI:
             self.concealer_stream.reset_state()
 
             stream_config = self.concealer_stream.stream_config
+
+            def input_callback_with_meter(indata, frames, time_info, status):
+                self.concealer_stream.input_callback(indata, frames, time_info, status)
+                self._push_level("in", self.in_level_var, indata)
+
+            def output_callback_with_meter(outdata, frames, time_info, status):
+                self.concealer_stream.output_callback(outdata, frames, time_info, status)
+                self._push_level("out", self.out_level_var, outdata)
+
             # Two independent streams instead of one combined duplex stream:
             # the input side keeps the algorithm's fixed ~50ms blocksize
             # (needed for VAD/feature extraction), while the output stream is
@@ -345,7 +554,7 @@ class ConcealerGUI:
                 dtype=stream_config["dtype"],
                 channels=stream_config["channels_in"],
                 device=stream_config["device_in"],
-                callback=self.concealer_stream.input_callback,
+                callback=input_callback_with_meter,
                 latency=stream_config.get("input_latency", "low"),
             )
             self.output_stream = sd.OutputStream(
@@ -353,7 +562,7 @@ class ConcealerGUI:
                 dtype=stream_config["dtype"],
                 channels=stream_config["channels_out"],
                 device=stream_config["device_out"],
-                callback=self.concealer_stream.output_callback,
+                callback=output_callback_with_meter,
                 latency=stream_config.get("output_latency", "high"),
             )
             self.input_stream.start()
@@ -367,6 +576,7 @@ class ConcealerGUI:
             self.input_stream = None
             self.output_stream = None
             self.concealer_stream = None
+            self._start_input_monitor()
             return
 
         self.start_stop_btn.config(text="Stop")
@@ -406,7 +616,10 @@ class ConcealerGUI:
         self.start_stop_btn.config(text="Start")
         self.progress_var.set("—")
         self.latency_var.set("—")
+        self.in_level_var.set(0)
+        self.out_level_var.set(0)
         self._set_controls_enabled(True)
+        self._start_input_monitor()
 
     def _set_controls_enabled(self, enabled):
         """Enable or disable every setting widget (locked while a stream is running, see comment below)."""
@@ -421,6 +634,7 @@ class ConcealerGUI:
         self.vad_type_combo.config(state=combo_state)
         self.vad_param_scale.config(state=scale_state)
         self.denoiser_combo.config(state=combo_state)
+        self.ping_btn.config(state="normal" if enabled else "disabled")
 
     def _refresh_status(self):
         """Poll the running stream's progress/latency and update the status labels; reschedules itself every 500ms."""

@@ -326,6 +326,11 @@ conducted at LS2N, LORIA, and IRCAM.
 
 ## Changelog
 
+### 0.1.2
+
+- Added input/output level meters to the GUI
+- Added a "Ping" button to the GUI to play a test tone.
+
 ### 0.1.1
 
 - Pinned exact versions for Python (`3.11.15`) and every dependency.
