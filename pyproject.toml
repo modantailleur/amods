@@ -12,8 +12,10 @@ license = { file = "LICENSE" }
 authors = [
     { name = "Modan Tailleur" },
     { name = "Aine Drelingyte" },
+    { name = "Clara Boukhemia" },
     { name = "Mathieu Lagrange" },
     { name = "Romain Serizel" },
+    { name = "Nicolas Misdariis" },
 ]
 maintainers = [{ name = "Modan Tailleur", email = "modan.tailleur@gmail.com" }]
 classifiers = [

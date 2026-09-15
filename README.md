@@ -1,11 +1,6 @@
 # AMODS — Adaptive Masking of Distracting Speech
 
-A framework for real-time algorithms that make nearby speech unintelligible to
-listeners.
-
-This work is supported by the French National Research Agency (ANR) under the
-[ReNAR project](https://anr.fr/Projet-ANR-23-CE33-0012) (ANR-23-CE33-0012),
-*"Augmentation des Environnements Sonores pour la Réduction de la Gêne"*.
+A framework for real-time algorithms that make nearby speech unintelligible to listeners.
 
 ## Background
 
@@ -293,9 +288,30 @@ latency:
 amods-latency --device-in 15 --device-out 11
 ```
 
+## Fundings
+
+This work is supported by the French National Research Agency (ANR) through the
+[ReNAR project](https://anr.fr/Projet-ANR-23-CE33-0012) (ANR-23-CE33-0012),
+*"Augmentation des Environnements Sonores pour la Réduction de la Gêne"*,
+conducted at LS2N, LORIA, and IRCAM.
+
+<p>
+<img src="https://raw.githubusercontent.com/modantailleur/amods/master/assets/logos/anr.jpg" alt="ANR" height="60">
+&nbsp;&nbsp;
+<img src="https://raw.githubusercontent.com/modantailleur/amods/master/assets/logos/cnrs.png" alt="CNRS" height="60">
+&nbsp;&nbsp;
+<img src="https://raw.githubusercontent.com/modantailleur/amods/master/assets/logos/ls2n.jpeg" alt="LS2N" height="60">
+&nbsp;&nbsp;
+<img src="https://raw.githubusercontent.com/modantailleur/amods/master/assets/logos/loria.jpg" alt="LORIA" height="60">
+&nbsp;&nbsp;
+<img src="https://raw.githubusercontent.com/modantailleur/amods/master/assets/logos/ircam.jpg" alt="IRCAM" height="60">
+</p>
+
 ## Authors
 
 - Modan Tailleur
 - Aine Drelingyte
+- Clara Boukhemia
 - Mathieu Lagrange
 - Romain Serizel
+- Nicolas Misdariis
