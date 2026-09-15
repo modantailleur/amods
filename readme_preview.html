@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMODS README Preview</title>
+<style>
+  :root{
+    --page-bg:#eef0f3;
+    --toolbar-bg:#ffffff;
+    --toolbar-border:#d8dce2;
+    --ink:#1c2128;
+    --muted:#5b6472;
+    --accent:#3b6e8f;
+    --accent-soft:#e4edf1;
+    --frame-bg:#ffffff;
+    --frame-border:#d8dce2;
+    --frame-shadow:0 1px 2px rgba(20,25,35,.04), 0 8px 24px rgba(20,25,35,.06);
+
+    --gh-bg:#ffffff;
+    --gh-fg:#1f2328;
+    --gh-muted:#59636e;
+    --gh-border:#d1d9e0;
+    --gh-link:#0969da;
+    --gh-code-bg:#f6f8fa;
+    --gh-header-bg:#f6f8fa;
+
+    --pypi-bg:#ffffff;
+    --pypi-outer:#fafbfc;
+    --pypi-fg:#0a0a0a;
+    --pypi-muted:#5c6975;
+    --pypi-link:#0073b7;
+    --pypi-border:#e6e8eb;
+    --pypi-code-bg:#f8f9fa;
+    --pypi-strip:#0073b7;
+    --pypi-strip-fg:#ffffff;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --page-bg:#0c0f13; --toolbar-bg:#141920; --toolbar-border:#262d38;
+      --ink:#e7ebf1; --muted:#95a1b0; --accent:#6fb3d9; --accent-soft:#1a2b33;
+      --frame-bg:#12161c; --frame-border:#262d38;
+      --frame-shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.4);
+      --gh-bg:#0d1117; --gh-fg:#e6edf3; --gh-muted:#9198a1; --gh-border:#30363d;
+      --gh-link:#4493f8; --gh-code-bg:#161b22; --gh-header-bg:#161b22;
+      --pypi-bg:#161a1f; --pypi-outer:#0f1216; --pypi-fg:#e8eaed; --pypi-muted:#9aa4af;
+      --pypi-link:#5fb3ea; --pypi-border:#2a2f36; --pypi-code-bg:#1d2228;
+      --pypi-strip:#075a89; --pypi-strip-fg:#ffffff;
+    }
+  }
+  :root[data-theme="dark"]{
+    --page-bg:#0c0f13; --toolbar-bg:#141920; --toolbar-border:#262d38;
+    --ink:#e7ebf1; --muted:#95a1b0; --accent:#6fb3d9; --accent-soft:#1a2b33;
+    --frame-bg:#12161c; --frame-border:#262d38;
+    --frame-shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.4);
+    --gh-bg:#0d1117; --gh-fg:#e6edf3; --gh-muted:#9198a1; --gh-border:#30363d;
+    --gh-link:#4493f8; --gh-code-bg:#161b22; --gh-header-bg:#161b22;
+    --pypi-bg:#161a1f; --pypi-outer:#0f1216; --pypi-fg:#e8eaed; --pypi-muted:#9aa4af;
+    --pypi-link:#5fb3ea; --pypi-border:#2a2f36; --pypi-code-bg:#1d2228;
+    --pypi-strip:#075a89; --pypi-strip-fg:#ffffff;
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--page-bg);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    padding:20px 16px 48px;
+  }
+
+  .wrap{max-width:1040px;margin:0 auto;}
+
+  .masthead{
+    display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;
+    background:var(--toolbar-bg);
+    border:1px solid var(--toolbar-border);
+    border-radius:12px;
+    padding:14px 18px;
+    margin-bottom:18px;
+  }
+  .masthead h1{
+    font-size:15px;font-weight:650;margin:0;letter-spacing:.01em;
+    display:flex;align-items:center;gap:8px;
+  }
+  .masthead h1 .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;}
+  .masthead .sub{font-size:12.5px;color:var(--muted);margin-right:auto;}
+
+  .switch{display:inline-flex;background:var(--accent-soft);border-radius:999px;padding:3px;gap:2px;}
+  .switch button{
+    appearance:none;border:0;background:transparent;color:var(--muted);
+    font:inherit;font-size:12.5px;font-weight:600;letter-spacing:.02em;
+    padding:7px 16px;border-radius:999px;cursor:pointer;
+  }
+  .switch button.active{background:var(--frame-bg);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+  .switch button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  .note{
+    font-size:12.5px;color:var(--muted);
+    background:var(--toolbar-bg);
+    border:1px solid var(--toolbar-border);
+    border-radius:12px;
+    padding:10px 16px;
+    margin-bottom:18px;
+  }
+  .note code{
+    background:var(--accent-soft);padding:1px 5px;border-radius:5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;
+  }
+  .note.warn{color:#9a4b2f;background:#fbeee8;border-color:#f0d3c4;}
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]) .note.warn{color:#f0b39a;background:#2a1c16;border-color:#4a2c1e;}
+  }
+  :root[data-theme="dark"] .note.warn{color:#f0b39a;background:#2a1c16;border-color:#4a2c1e;}
+
+  .stage{border-radius:14px;overflow:hidden;border:1px solid var(--frame-border);box-shadow:var(--frame-shadow);background:var(--frame-bg);}
+
+  .gh-topbar{
+    display:flex;align-items:center;gap:10px;
+    background:var(--gh-header-bg);
+    border-bottom:1px solid var(--gh-border);
+    padding:10px 16px;
+    font-size:12.5px;color:var(--gh-muted);
+  }
+  .gh-topbar .branch{
+    display:inline-flex;align-items:center;gap:5px;
+    border:1px solid var(--gh-border);border-radius:6px;padding:3px 8px;
+    font-weight:600;color:var(--gh-fg);
+  }
+  .gh-topbar .branch svg{width:12px;height:12px;fill:var(--gh-fg);}
+  .gh-topbar .path{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .gh-topbar .path b{color:var(--gh-fg);font-weight:600;}
+
+  .pypi-topbar{
+    display:none;
+    background:var(--pypi-strip);color:var(--pypi-strip-fg);
+    padding:16px 28px;
+  }
+  .pypi-topbar .name{font-size:22px;font-weight:600;}
+  .pypi-topbar .name .ver{font-weight:400;opacity:.85;font-size:16px;margin-left:8px;}
+  .pypi-topbar .tag{font-size:12.5px;opacity:.85;margin-top:2px;}
+
+  .body-outer{background:var(--gh-bg);}
+  .body-inner{padding:32px 40px 48px;max-width:840px;margin:0 auto;}
+
+  .markdown-body{color:var(--gh-fg);font-size:15px;line-height:1.6;}
+  .markdown-body h1,.markdown-body h2,.markdown-body h3{
+    font-weight:650;color:var(--gh-fg);
+    margin:26px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--gh-border);
+    text-wrap:balance;
+  }
+  .markdown-body h1{font-size:26px;margin-top:0;}
+  .markdown-body h2{font-size:20px;}
+  .markdown-body h3{font-size:16.5px;border-bottom:none;padding-bottom:0;margin-top:22px;}
+  .markdown-body p{margin:0 0 15px;}
+  .markdown-body a{color:var(--gh-link);text-decoration:none;}
+  .markdown-body a:hover{text-decoration:underline;}
+  .markdown-body strong{font-weight:650;}
+  .markdown-body em{color:var(--gh-muted);}
+  .markdown-body ul{margin:0 0 15px;padding-left:26px;}
+  .markdown-body li{margin:3px 0;}
+  .markdown-body li code, .markdown-body p code{
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    background:var(--gh-code-bg);border-radius:5px;padding:.15em .4em;font-size:.87em;
+  }
+  .markdown-body pre{
+    background:var(--gh-code-bg);border-radius:8px;padding:14px 16px;overflow-x:auto;
+    margin:0 0 16px;border:1px solid var(--gh-border);
+  }
+  .markdown-body pre code{
+    background:none;padding:0;font-size:13px;line-height:1.55;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--gh-fg);
+  }
+  .markdown-body img{max-width:100%;vertical-align:middle;}
+  .markdown-body hr{border:0;border-top:1px solid var(--gh-border);margin:24px 0;}
+
+  .stage[data-style="pypi"] .gh-topbar{display:none;}
+  .stage[data-style="pypi"] .pypi-topbar{display:block;}
+  .stage[data-style="pypi"] .body-outer{background:var(--pypi-outer);}
+  .stage[data-style="pypi"] .body-inner{
+    max-width:760px;background:var(--pypi-bg);
+    border:1px solid var(--pypi-border);border-radius:10px;
+    padding:30px 40px 40px;margin:24px auto;
+  }
+  .stage[data-style="pypi"] .markdown-body{color:var(--pypi-fg);font-size:15.5px;}
+  .stage[data-style="pypi"] .markdown-body h1,
+  .stage[data-style="pypi"] .markdown-body h2,
+  .stage[data-style="pypi"] .markdown-body h3{color:var(--pypi-fg);border-bottom:none;font-weight:700;}
+  .stage[data-style="pypi"] .markdown-body h1{font-size:22px;padding-bottom:10px;border-bottom:1px solid var(--pypi-border);}
+  .stage[data-style="pypi"] .markdown-body h2{font-size:18px;}
+  .stage[data-style="pypi"] .markdown-body a{color:var(--pypi-link);}
+  .stage[data-style="pypi"] .markdown-body em{color:var(--pypi-muted);font-style:italic;}
+  .stage[data-style="pypi"] .markdown-body pre{background:var(--pypi-code-bg);border-color:var(--pypi-border);}
+  .stage[data-style="pypi"] .markdown-body li code,
+  .stage[data-style="pypi"] .markdown-body p code{background:var(--pypi-code-bg);}
+
+  @media (max-width:560px){
+    .body-inner{padding:22px 18px 32px;}
+    .stage[data-style="pypi"] .body-inner{padding:20px 18px 28px;margin:14px auto;}
+    .pypi-topbar{padding:14px 18px;}
+    .masthead{padding:12px 14px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="masthead">
+    <h1><span class="dot"></span>README preview</h1>
+    <span class="sub">amods &middot; live from README.md</span>
+    <div class="switch" role="tablist" aria-label="Preview style">
+      <button type="button" data-style="github" class="active" role="tab" aria-selected="true">GitHub</button>
+      <button type="button" data-style="pypi" role="tab" aria-selected="false">PyPI</button>
+    </div>
+  </div>
+
+  <div id="notes"></div>
+
+  <div class="stage" data-style="github">
+    <div class="gh-topbar">
+      <span class="branch">
+        <svg viewBox="0 0 16 16"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122v.756a2.25 2.25 0 0 1-1.373 2.073l-3.376 1.405a.75.75 0 0 0-.462.693v.13a2.25 2.25 0 1 1-1.5 0v-.13a2.25 2.25 0 0 1 1.386-2.08l3.377-1.406A.75.75 0 0 0 11 6.128v-.756a2.25 2.25 0 0 1-1.5-2.122ZM5 3.25a.75.75 0 1 0 0 .005V3.25Zm7.25.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM6 11.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0Z"/></svg>
+        master
+      </span>
+      <span class="path">amods / <b>README.md</b></span>
+    </div>
+    <div class="pypi-topbar">
+      <div class="name">amods <span class="ver">0.1.0</span></div>
+      <div class="tag">Adaptive Masking of Distracting Speech &middot; Project description</div>
+    </div>
+    <div class="body-outer">
+      <div class="body-inner">
+        <div class="markdown-body" id="content">Loading README.md…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script>
+  const notes = document.getElementById("notes");
+  const content = document.getElementById("content");
+
+  function note(text, warn){
+    const el = document.createElement("div");
+    el.className = "note" + (warn ? " warn" : "");
+    el.innerHTML = text;
+    notes.appendChild(el);
+  }
+
+  fetch("./README.md", { cache: "no-store" })
+    .then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.text();
+    })
+    .then(md => {
+      // The published README points logos at raw.githubusercontent.com so it
+      // renders on GitHub/PyPI; for this local preview, point them at the
+      // repo's own local files instead, so it works before (and after) push.
+      const localized = md.replace(
+        /https:\/\/raw\.githubusercontent\.com\/modantailleur\/amods\/[^/]+\/assets\/logos\//g,
+        "./assets/logos/"
+      );
+      content.innerHTML = marked.parse(localized, { headerIds:false, mangle:false });
+      note("Rendering the live contents of <code>README.md</code> from this folder (refresh after editing it). " +
+           "Logo URLs are swapped to local <code>./assets/logos/…</code> paths for preview only &mdash; " +
+           "the committed README still points at <code>raw.githubusercontent.com</code>.");
+    })
+    .catch(err => {
+      content.innerHTML = "";
+      note("Could not load <code>README.md</code> (" + err.message + "). " +
+           "This page needs to be served over http(s), not opened directly as a file &mdash; " +
+           "use VS Code's \"Open with Live Server\", or run <code>python3 -m http.server</code> " +
+           "in this folder and open it from there.", true);
+    });
+
+  const stage = document.querySelector(".stage");
+  document.querySelectorAll(".switch button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".switch button").forEach(b => { b.classList.remove("active"); b.setAttribute("aria-selected","false"); });
+      btn.classList.add("active");
+      btn.setAttribute("aria-selected","true");
+      stage.dataset.style = btn.dataset.style;
+    });
+  });
+</script>
+</body>
+</html>
