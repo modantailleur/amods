@@ -7,7 +7,7 @@ name = "amods"
 version = "0.1.0"
 description = "Adaptive Masking of Distracting Speech (AMODS)"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = "==3.11.15"
 license = { file = "LICENSE" }
 authors = [
     { name = "Modan Tailleur" },
@@ -27,23 +27,21 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "numpy>=1.24",
-    "scipy>=1.10",
-    "librosa>=0.10",
-    "soundfile>=0.12",
-    "sounddevice>=0.4",
-    "PyYAML>=6.0",
-    "torch>=2.0",
-    "torchaudio>=2.0",
-    "denoiser>=0.1.5",
-    "ten_vad>=1.0.6",
-    "silero-vad>=5.0",
-    "webrtcvad>=2.0",
+    "numpy==2.4.6",
+    "librosa==0.11.0",
+    "soundfile==0.13.1",
+    "sounddevice==0.5.5",
+    "PyYAML==6.0.3",
+    "torch==2.11.0",
+    "denoiser==0.1.5",
+    "ten_vad==1.0.6.8",
+    "silero-vad==6.2.1",
+    "webrtcvad==2.0.10",
 ]
 
 [project.optional-dependencies]
 gui = []
-dev = ["pytest>=7.0"]
+dev = ["pytest==9.1.1"]
 
 [project.scripts]
 amods = "amods.cli:main"

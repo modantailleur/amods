@@ -21,29 +21,37 @@ without reaching a distracting level.
 
 ## Install
 
-In a Python 3.9+ environment:
+AMODS pins exact versions of Python and its dependencies to ensure that the
+tested configuration can be reproduced. We recommend installing it in a
+**new, dedicated environment** rather than an existing environment, as these
+pins may conflict with other installed packages. AMODS requires **Python
+3.11.15**.
 
-```
+```bash
+conda create -n amods python=3.11.15
+conda activate amods
 pip install amods
 ```
 
-This pulls in all runtime dependencies (numpy, scipy, librosa, soundfile, sounddevice,
-PyYAML, torch, torchaudio, denoiser, ten_vad, silero-vad, webrtcvad). If `ten_vad`
-fails to install, you can force reinstall it with:
+This installs all runtime dependencies at their pinned versions, including
+numpy, librosa, soundfile, sounddevice, PyYAML, torch, denoiser, ten_vad,
+silero-vad, and webrtcvad. If `ten_vad` fails to install, it can be
+force-reinstalled with:
 
-```
+```bash
 pip install -U --force-reinstall -v git+https://github.com/TEN-framework/ten-vad.git
 ```
 
-To work on amods itself (e.g. to run the test suite), clone the repository and install
-it in editable mode instead:
+To develop AMODS itself, for example to run the test suite, clone the
+repository and install it in editable mode:
 
-```
+```bash
 git clone https://github.com/modantailleur/amods.git
 cd amods
 pip install -e ".[dev]"
 pytest
 ```
+
 
 ## Real-Time Concealing (GUI)
 
