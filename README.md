@@ -323,3 +323,16 @@ conducted at LS2N, LORIA, and IRCAM.
 - Mathieu Lagrange
 - Romain Serizel
 - Nicolas Misdariis
+
+## Changelog
+
+### 0.1.1
+
+- Pinned exact versions for Python (`3.11.15`) and every dependency.
+- Removed `scipy` and `torchaudio` from the dependencies.
+- Added new authors.
+- Added a Funding section.
+
+### 0.1.0
+
+- Initial release.
