@@ -1,0 +1,43 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: py${{ matrix.python-version }} / ${{ matrix.deps }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        # "latest": whatever pip resolves as newest within pyproject.toml's
+        # ranges (what a fresh `pip install amods` gets today).
+        # "minimum": every dependency pinned to the lowest version its range
+        # allows (constraints-min.txt), to prove that floor actually works
+        # rather than being an unverified guess.
+        deps: [latest, minimum]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # sounddevice needs PortAudio's shared library at import time, even
+      # when no test actually opens a real audio stream.
+      - name: Install PortAudio
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+
+      - name: Install amods (latest allowed versions)
+        if: matrix.deps == 'latest'
+        run: pip install -e ".[dev]"
+
+      - name: Install amods (minimum allowed versions)
+        if: matrix.deps == 'minimum'
+        run: pip install -e ".[dev]" -c constraints-min.txt
+
+      - name: Run tests
+        run: pytest -v

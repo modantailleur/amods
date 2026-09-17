@@ -1,0 +1,19 @@
+# Pins every dependency to the *lowest* version allowed by pyproject.toml's
+# ranges. Used only by the "minimum versions" CI job (see
+# .github/workflows/tests.yml) to prove those lower bounds actually work,
+# rather than just being an unverified guess. Keep these in sync with the
+# lower bound of each range in pyproject.toml's [project.dependencies] and
+# [project.optional-dependencies].dev.
+numpy==2.0
+librosa==0.10
+soundfile==0.12.1
+sounddevice==0.4
+PyYAML==6.0; python_version < "3.12"
+PyYAML==6.0.1; python_version >= "3.12"
+torch==2.0.0; python_version < "3.12"
+torch==2.2.0; python_version >= "3.12"
+denoiser==0.1.5
+ten_vad==1.0.6.3
+silero-vad==5.1
+webrtcvad==2.0.7
+pytest==7.0

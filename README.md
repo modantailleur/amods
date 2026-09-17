@@ -21,21 +21,15 @@ without reaching a distracting level.
 
 ## Install
 
-AMODS pins exact versions of Python and its dependencies to ensure that the
-tested configuration can be reproduced. We recommend installing it in a
-**new, dedicated environment** rather than an existing environment, as these
-pins may conflict with other installed packages. AMODS requires **Python
-3.11.15**.
+AMODS requires **Python 3.10, 3.11, or 3.12**.
 
 ```bash
-conda create -n amods python=3.11.15
+conda create -n amods python=3.11
 conda activate amods
 pip install amods
 ```
 
-This installs all runtime dependencies at their pinned versions, including
-numpy, librosa, soundfile, sounddevice, PyYAML, torch, denoiser, ten_vad,
-silero-vad, and webrtcvad. If `ten_vad` fails to install, it can be
+If `ten_vad` fails to install, it can be
 force-reinstalled with:
 
 ```bash
@@ -325,6 +319,12 @@ conducted at LS2N, LORIA, and IRCAM.
 - Nicolas Misdariis
 
 ## Changelog
+
+### 0.1.3
+
+- Replaced the exact version pins for Python and every dependency with
+  ranges, since exact pins were too strict for most environments.
+- Added a CI matrix (`.github/workflows/tests.yml`) that installs AMODS at both the lowest and the newest version each range allows, on Python 3.10, 3.11, and 3.12, and runs the test suite against every combination.
 
 ### 0.1.2
 
