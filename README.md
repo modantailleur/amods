@@ -320,6 +320,12 @@ conducted at LS2N, LORIA, and IRCAM.
 
 ## Changelog
 
+### 0.1.4
+
+- Fixed `torch`'s dependency floor
+- Fixed `librosa`'s dependency floor
+- Added `onnxruntime` as an explicit dependency, as required by the `silero` VAD backend
+
 ### 0.1.3
 
 - Replaced the exact version pins for Python and every dependency with
