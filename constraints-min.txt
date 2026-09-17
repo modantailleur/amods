@@ -10,10 +10,18 @@ soundfile==0.12.1
 sounddevice==0.4
 PyYAML==6.0; python_version < "3.12"
 PyYAML==6.0.1; python_version >= "3.12"
+# torchaudio isn't a direct amods dependency (it's pulled in transitively,
+# e.g. by denoiser and by silero-vad's own import chain), but its compiled
+# extension must exactly match torch's version or it fails at import time
+# with "undefined symbol" - so it's pinned here too, to the version each
+# torch release actually pairs with.
 torch==2.0.0; python_version < "3.12"
+torchaudio==2.0.1; python_version < "3.12"
 torch==2.2.0; python_version >= "3.12"
+torchaudio==2.2.0; python_version >= "3.12"
 denoiser==0.1.5
 ten_vad==1.0.6.3
 silero-vad==5.1
 webrtcvad==2.0.7
+onnxruntime==1.18.0
 pytest==7.0
