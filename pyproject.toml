@@ -28,11 +28,17 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=2.0,<3",
-    "librosa>=0.10,<0.12",
+    # librosa<0.10.2 imports pkg_resources (deprecated, and past setuptools's
+    # announced pkg_resources removal-eligible date), which isn't guaranteed
+    # present on every interpreter - 0.10.2 dropped that import entirely.
+    "librosa>=0.10.2,<0.12",
     "soundfile>=0.12.1,<0.14",
     "sounddevice>=0.4,<0.6",
     "PyYAML>=6.0,<7",
-    "torch>=2.0,<3",
+    # torch<2.3 can't interoperate with numpy>=2.0 (torch.from_numpy raises
+    # "RuntimeError: Numpy is not available") - verified empirically, not
+    # just documentation, since neither 2.0.0 nor 2.2.0 actually work here.
+    "torch>=2.3.0,<3",
     "denoiser>=0.1.5,<0.2",
     "ten_vad>=1.0.6.3,<1.1",
     "silero-vad>=5.1,<7",
