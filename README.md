@@ -325,6 +325,7 @@ conducted at LS2N, LORIA, and IRCAM.
 - Replaced the exact version pins for Python and every dependency with
   ranges, since exact pins were too strict for most environments.
 - Added a CI matrix (`.github/workflows/tests.yml`) that installs AMODS at both the lowest and the newest version each range allows, on Python 3.10, 3.11, and 3.12, and runs the test suite against every combination.
+- `input_latency` / `output_latency` in the stream config now accept `null`, to use the host API's own default latency instead of a fixed buffer or the `'low'`/`'high'` presets. Documented in `configs/stream/default.yaml`, and `output_latency` now defaults to `null` instead of a fixed `0.15`.
 
 ### 0.1.2
 
