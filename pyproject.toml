@@ -36,9 +36,13 @@ dependencies = [
     "sounddevice>=0.4,<0.6",
     "PyYAML>=6.0,<7",
     # torch<2.3 can't interoperate with numpy>=2.0 (torch.from_numpy raises
-    # "RuntimeError: Numpy is not available") - verified empirically, not
-    # just documentation, since neither 2.0.0 nor 2.2.0 actually work here.
-    "torch>=2.3.0,<3",
+    # "RuntimeError: Numpy is not available") on any platform - verified
+    # empirically (2.0.0 and 2.2.0 both fail). torch==2.3.0 fixes this on
+    # Linux/macOS but NOT on Windows (confirmed via real Windows CI, not
+    # locally - there's no way to run Windows binaries from this machine);
+    # 2.5.0 is a safety-margin bump pending that CI confirming it's actually
+    # fixed there too.
+    "torch>=2.5.0,<3",
     "denoiser>=0.1.5,<0.2",
     # ten_vad<1.0.6.5's wheel is mistagged py3-none-any but actually bundles
     # a Linux-only compiled .so - it fails to import at all on Windows/macOS.

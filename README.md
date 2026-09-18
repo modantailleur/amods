@@ -342,6 +342,9 @@ conducted at LS2N, LORIA, and IRCAM.
   build flag and has never published a Windows wheel, so it can't actually
   be installed there. The `"webrtc"` VAD type is unavailable on Windows as a
   result — use `"silero"` or `"ten"` instead.
+- Raised `torch`'s dependency floor to `2.5.0`: `2.3.0` fixed its
+  interoperability with `numpy>=2.0` on Linux/macOS, but the same
+  `RuntimeError: Numpy is not available` still occurred on Windows.
 - CI now also runs on Windows and macOS, not just Linux (still across both
   the lowest and newest version each dependency range allows).
 

@@ -17,8 +17,8 @@ PyYAML==6.0.1; python_version >= "3.12"
 # actually pairs with. 2.3.0 is amods's real floor (see the comment on
 # torch's own line in pyproject.toml), so no python_version split is needed
 # here - unlike PyYAML above, 2.3.0 already ships cp310/cp311/cp312 wheels.
-torch==2.3.0
-torchaudio==2.3.0
+torch==2.5.0
+torchaudio==2.5.0
 denoiser==0.1.5
 ten_vad==1.0.6.5
 silero-vad==5.1
