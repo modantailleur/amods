@@ -40,9 +40,18 @@ dependencies = [
     # just documentation, since neither 2.0.0 nor 2.2.0 actually work here.
     "torch>=2.3.0,<3",
     "denoiser>=0.1.5,<0.2",
-    "ten_vad>=1.0.6.3,<1.1",
+    # ten_vad<1.0.6.5's wheel is mistagged py3-none-any but actually bundles
+    # a Linux-only compiled .so - it fails to import at all on Windows/macOS.
+    # 1.0.6.5 is the first release that properly bundles binaries for all
+    # three platforms.
+    "ten_vad>=1.0.6.5,<1.1",
     "silero-vad>=5.1,<7",
-    "webrtcvad>=2.0.7,<3",
+    # webrtcvad's C extension hard-codes WEBRTC_POSIX in its build and has
+    # never published a Windows wheel across its entire version history - it
+    # isn't written to compile there. Excluded on Windows; amods.models.vad
+    # already imports it lazily and the "webrtc" VAD type just isn't
+    # available there (use "silero" or "ten" instead).
+    "webrtcvad>=2.0.7,<3; sys_platform != 'win32'",
     "onnxruntime>=1.18.0,<2",
 ]
 

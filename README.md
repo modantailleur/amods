@@ -30,7 +30,7 @@ pip install amods
 ```
 
 On Linux, two system libraries are also required (on macOS and Windows, the
-equivalent binaries are already bundled inside the Python packages): `libportaudio2, and `libc++1`. On
+equivalent binaries are already bundled inside the Python packages): `libportaudio2` and `libc++1`. On
 Debian/Ubuntu:
 
 ```bash
@@ -335,6 +335,15 @@ conducted at LS2N, LORIA, and IRCAM.
 - The GUI now loads the Silero VAD model and downloads the FbDM denoiser
   weights in the background as soon as it launches, instead of waiting for
   the first Start press.
+- Fixed `ten_vad`'s dependency floor: versions below `1.0.6.5` bundle a
+  Linux-only compiled binary despite claiming to be platform-independent, so
+  they fail to import at all on Windows/macOS. Raised the floor to `1.0.6.5`.
+- Excluded `webrtcvad` on Windows: its C extension hard-codes a POSIX-only
+  build flag and has never published a Windows wheel, so it can't actually
+  be installed there. The `"webrtc"` VAD type is unavailable on Windows as a
+  result — use `"silero"` or `"ten"` instead.
+- CI now also runs on Windows and macOS, not just Linux (still across both
+  the lowest and newest version each dependency range allows).
 
 ### 0.1.4
 

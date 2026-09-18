@@ -6,11 +6,12 @@ on:
 
 jobs:
   test:
-    name: py${{ matrix.python-version }} / ${{ matrix.deps }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / py${{ matrix.python-version }} / ${{ matrix.deps }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
         # "latest": whatever pip resolves as newest within pyproject.toml's
         # ranges (what a fresh `pip install amods` gets today).
@@ -30,7 +31,10 @@ jobs:
       # when no test actually opens a real audio stream. ten_vad's compiled
       # extension is linked against libc++ (LLVM's C++ runtime), which
       # Ubuntu doesn't install by default (it ships libstdc++ instead).
+      # Both binaries ship bundled inside the Windows/macOS Python packages,
+      # so this step is Linux-only.
       - name: Install system libraries
+        if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libportaudio2 libc++1
 
       # --extra-index-url pulls CPU-only builds of torch/torchaudio. These
