@@ -9,6 +9,7 @@ repository, otherwise ``~/.amods/configs/``), so the ``amods`` CLI picks up
 whatever was last configured here.
 """
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -244,6 +245,7 @@ class ConcealerGUI:
         self._on_vad_type_change()
         self._update_warnings()
         self._start_input_monitor()
+        self._prefetch_models()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _on_close(self):
@@ -256,6 +258,49 @@ class ConcealerGUI:
             except Exception:
                 pass
         self.root.destroy()
+
+    # ── Model prefetch ───────────────────────────────────────────────────
+
+    def _prefetch_models(self):
+        """
+        Load the Silero VAD model and download the FbDM denoiser weights now,
+        in the background, instead of leaving that to happen the moment
+        Start is first pressed. Silero's model ships bundled inside its
+        package (loading it is fast and fully offline); the FbDM denoiser's
+        weights are the one genuine network download here, fetched on first
+        use and cached to disk afterwards, so this is a no-op on every launch
+        after the first on a given machine. (webrtc/ten VAD need neither, so
+        they're not touched here.)
+
+        Start is disabled meanwhile: building the real Stream on Start would
+        otherwise risk a second, concurrent download of the same file if the
+        user was fast enough to press it before this finished.
+        """
+        self.start_stop_btn.config(state="disabled")
+        self.status_var.set("Preparing models (first launch only)…")
+        threading.Thread(target=self._prefetch_models_worker, daemon=True).start()
+
+    def _prefetch_models_worker(self):
+        """Runs on a background thread; only touches Tk state via `root.after`."""
+        error = None
+        try:
+            from silero_vad import load_silero_vad
+            load_silero_vad()
+
+            from denoiser import pretrained
+            pretrained.dns64()
+        except Exception as e:
+            error = str(e)
+
+        self.root.after(0, self._on_models_prefetched, error)
+
+    def _on_models_prefetched(self, error):
+        """Re-enable Start once prefetch finishes; runs on the Tk main thread."""
+        self.start_stop_btn.config(state="normal")
+        if error is not None:
+            self.status_var.set(f"Idle — press Start to begin (model prefetch failed: {error})")
+        else:
+            self.status_var.set("Idle — press Start to begin")
 
     # ── Device selection helpers ─────────────────────────────────────────
 

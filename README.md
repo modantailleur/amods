@@ -29,6 +29,14 @@ conda activate amods
 pip install amods
 ```
 
+On Linux, two system libraries are also required (on macOS and Windows, the
+equivalent binaries are already bundled inside the Python packages): `libportaudio2, and `libc++1`. On
+Debian/Ubuntu:
+
+```bash
+sudo apt install libportaudio2 libc++1
+```
+
 If `ten_vad` fails to install, it can be
 force-reinstalled with:
 
@@ -319,6 +327,14 @@ conducted at LS2N, LORIA, and IRCAM.
 - Nicolas Misdariis
 
 ## Changelog
+
+### 0.1.5
+
+- Documented the Linux-only system library requirements (`libportaudio2`,
+  `libc++1`).
+- The GUI now loads the Silero VAD model and downloads the FbDM denoiser
+  weights in the background as soon as it launches, instead of waiting for
+  the first Start press.
 
 ### 0.1.4
 
