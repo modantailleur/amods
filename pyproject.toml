@@ -30,10 +30,15 @@ dependencies = [
     # 1.26.4 satisfies every transitive floor (onnxruntime>=1.24.2,
     # scikit-learn>=1.22, numba>=1.22) and is the first 1.x release with a
     # cp312 wheel (1.24.x/1.25.x predate Python 3.12). Deliberately not
-    # raised to >=2.0: amods's own code uses no numpy-2.0-only API, and a
-    # >=2.0 floor would force torch>=2.3 (see the torch entry below), which
-    # has no macOS x86_64 (Intel) wheel at all.
-    "numpy>=1.26.4,<3",
+    # raised to >=2.0 in general: amods's own code uses no numpy-2.0-only
+    # API, and a >=2.0 floor would force torch>=2.3 (see the torch entry
+    # below), which has no macOS x86_64 (Intel) wheel at all - torch is
+    # capped at 2.2.2 there by wheel availability alone, but numpy itself
+    # still publishes 2.x wheels for that platform, so pip has no organic
+    # reason to hold it back the way it does torch. Capped explicitly below
+    # so the two never resolve to a mismatched, ABI-incompatible pair there.
+    "numpy>=1.26.4,<2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "numpy>=1.26.4,<3; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     # librosa<0.10.2 imports pkg_resources (deprecated, and past setuptools's
     # announced pkg_resources removal-eligible date), which isn't guaranteed
     # present on every interpreter - 0.10.2 dropped that import entirely.
