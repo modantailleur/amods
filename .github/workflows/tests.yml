@@ -16,7 +16,7 @@ jobs:
         # migrates what "-latest" points to - bump these deliberately. These
         # are what ubuntu-latest/windows-latest/macos-latest resolved to at
         # the time of pinning.
-        os: [ubuntu-24.04, windows-2025, macos-26, macos-26-intel]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, macos-26, macos-26-intel]
         python-version: ["3.10", "3.11", "3.12"]
         # "latest": whatever pip resolves as newest within pyproject.toml's
         # ranges (what a fresh `pip install amods` gets today).
@@ -39,7 +39,7 @@ jobs:
       # Both binaries ship bundled inside the Windows/macOS Python packages,
       # so this step is Linux-only.
       - name: Install system libraries
-        if: matrix.os == 'ubuntu-24.04'
+        if: matrix.os == 'ubuntu-24.04' || matrix.os == 'ubuntu-24.04-arm'
         run: sudo apt-get update && sudo apt-get install -y libportaudio2 libc++1
 
       # --extra-index-url pulls CPU-only builds of torch/torchaudio. These
