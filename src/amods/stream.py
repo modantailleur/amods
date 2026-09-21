@@ -3,6 +3,7 @@ import threading
 import time as _time
 
 import numpy as np
+import soundfile as sf
 
 from .audio import soft_clip
 from .config import resolve_config
@@ -51,7 +52,8 @@ class _AudioRingBuffer:
 
 
 class Stream:
-    def __init__(self, source_vad_config_name, concealer_config_name, stream_config_name, forecaster_config_name, is_stream, freeze_learning=False):
+    def __init__(self, source_vad_config_name, concealer_config_name, stream_config_name, forecaster_config_name, is_stream, freeze_learning=False,
+                 record_mode="memory", record_outdir=None, record_outprefix=""):
         """
         Each ``*_config_name`` accepts either a config name/path (str,
         resolved via :func:`amods.config.load_config`) or an already-built
@@ -63,6 +65,24 @@ class Stream:
             config["denoise"] = False
             Stream(source_vad_config_name="default_source",
                    concealer_config_name=config, ...)
+
+        ``record_mode`` controls what happens to the original/concealer/mix
+        audio produced every callback:
+
+        - ``"memory"`` (default): accumulate it in the ``rec_original`` /
+          ``rec_concealer`` / ``rec_mix`` lists, exactly like every previous
+          version of this class - the caller is responsible for
+          concatenating and writing them (see ``run_file_mode``). Fine for
+          short/offline runs, but for a long live session the ever-growing
+          lists and the single giant concatenate-then-write at the end can
+          make stopping take a very long time and use a lot of memory.
+        - ``"disk"``: write each block straight to disk as it arrives
+          (``record_outdir``/``record_outprefix`` name the files), and never
+          accumulate the in-memory lists at all - stopping is then just
+          closing already-fully-written files, regardless of session length.
+          Call :meth:`finalize_recording` when done to close them.
+        - ``"none"``: don't keep or write the audio at all - for a live
+          session where nothing needs to be saved.
         """
         self.source_vad_config_name = source_vad_config_name
         self.stream_config_name = stream_config_name
@@ -95,10 +115,18 @@ class Stream:
         self.concealer = select_concealer_model(self.stream_config["sr"], self.config_path, self.concealer_config)
         self.source_vad = select_vad_model(self.source_vad_config, sr=self.stream_config["sr"])
         self.forecaster = select_forecaster_model(self.forecaster_config, sr=self.stream_config["sr"])
-        self.rec_original = []   # raw input (mono)
-        self.rec_concealer = []  # concealer output (mono)
+        self.rec_original = []   # raw input (mono) - populated only in record_mode="memory"
+        self.rec_concealer = []  # concealer output (mono) - populated only in record_mode="memory"
         self.rec_concealer_metadata = []
-        self.rec_mix = []        # recorded mix (stereo)
+        self.rec_mix = []        # recorded mix (stereo) - populated only in record_mode="memory"
+
+        if record_mode not in ("memory", "disk", "none"):
+            raise ValueError(f"record_mode must be 'memory', 'disk', or 'none', got {record_mode!r}")
+        self.record_mode = record_mode
+        self.record_paths = None
+        self._record_writers = None
+        if record_mode == "disk":
+            self._open_record_writers(record_outdir, record_outprefix)
 
         # Used only by the split-stream real-time mode (input_callback/
         # output_callback): decouples the algorithm's fixed ~50ms chunk size
@@ -121,6 +149,37 @@ class Stream:
         self._callback_ms_max = 0.0
         self._callback_ms_count = 0
         return avg_ms, max_ms
+
+    def _open_record_writers(self, record_outdir, record_outprefix):
+        """Open the original/concealer/mix .wav files for incremental (record_mode="disk") writing."""
+        os.makedirs(record_outdir, exist_ok=True)
+        prefix = os.path.join(record_outdir, record_outprefix)
+        sr = self.stream_config["sr"]
+        n_out_channels = self.stream_config["channels_out"]
+        self.record_paths = {
+            "original": f"{prefix}_original.wav",
+            "concealer": f"{prefix}_concealer.wav",
+            "mix": f"{prefix}_mix.wav",
+        }
+        self._record_writers = {
+            "original": sf.SoundFile(self.record_paths["original"], mode="w", samplerate=sr, channels=1),
+            "concealer": sf.SoundFile(self.record_paths["concealer"], mode="w", samplerate=sr, channels=1),
+            "mix": sf.SoundFile(self.record_paths["mix"], mode="w", samplerate=sr, channels=n_out_channels),
+        }
+
+    def finalize_recording(self):
+        """
+        Close the disk writers opened for record_mode="disk" (a no-op, close
+        to instant, since every block was already written as it arrived) and
+        return the dict of file paths that were written, or None if this
+        Stream wasn't recording to disk.
+        """
+        if self._record_writers is None:
+            return None
+        for writer in self._record_writers.values():
+            writer.close()
+        self._record_writers = None
+        return self.record_paths
 
     def _process_chunk(self, x, n_out_channels):
         """
@@ -156,10 +215,16 @@ class Stream:
         rec_mix_mono = soft_clip(rec_mic + conc_block, limit=0.95)
 
         # ---- Record (shared) ----
-        self.rec_original.append(x.copy())
-        self.rec_concealer.append(conc_block.copy())
-        self.rec_concealer_metadata.append(voice_name)
-        self.rec_mix.append(np.tile(rec_mix_mono[:, np.newaxis], (1, n_out_channels)))
+        if self.record_mode == "memory":
+            self.rec_original.append(x.copy())
+            self.rec_concealer.append(conc_block.copy())
+            self.rec_concealer_metadata.append(voice_name)
+            self.rec_mix.append(np.tile(rec_mix_mono[:, np.newaxis], (1, n_out_channels)))
+        elif self.record_mode == "disk":
+            self._record_writers["original"].write(x)
+            self._record_writers["concealer"].write(conc_block)
+            self._record_writers["mix"].write(np.tile(rec_mix_mono[:, np.newaxis], (1, n_out_channels)))
+        # record_mode == "none": nothing kept or written.
 
         return play_mix
 

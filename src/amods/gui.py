@@ -14,7 +14,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 import sounddevice as sd
 import yaml
 
@@ -30,7 +29,7 @@ except ImportError as exc:  # pragma: no cover - platform dependent
 from .config import load_config, user_config_dir
 from .stream import Stream
 
-OUTPUT_DIR = "./output/"
+DEFAULT_OUTPUT_DIR = "./output/"
 
 WEBRTC_DEFAULT_LOGIT_THRESHOLD = 0.5
 
@@ -220,12 +219,31 @@ class ConcealerGUI:
         )
         self.denoiser_combo.grid(row=0, column=1, sticky="w", **pad)
 
+        # ── Recording ────────────────────────────────────────────────────
+        # Off by default: a session only gets written to disk if you ask for
+        # it, and doing so streams straight to the output files as audio
+        # arrives (see Stream's record_mode="disk") instead of holding the
+        # whole session in memory and writing it all at once on Stop - so
+        # stopping stays fast no matter how long you were recording.
+        recording_frame = ttk.Frame(root)
+        recording_frame.grid(row=5, column=0, columnspan=2, pady=(0, 4))
+
+        self.save_recording_var = tk.BooleanVar(value=False)
+        self.save_check = ttk.Checkbutton(
+            recording_frame, text="Save recording to:", variable=self.save_recording_var,
+        )
+        self.save_check.grid(row=0, column=0, padx=(0, 6))
+
+        self.output_dir_var = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
+        self.output_dir_entry = ttk.Entry(recording_frame, textvariable=self.output_dir_var, width=28)
+        self.output_dir_entry.grid(row=0, column=1)
+
         # ── Start/Stop + status ──────────────────────────────────────────
         self.start_stop_btn = ttk.Button(root, text="Start", command=self._on_start_stop)
-        self.start_stop_btn.grid(row=5, column=0, columnspan=2, pady=(4, 8))
+        self.start_stop_btn.grid(row=6, column=0, columnspan=2, pady=(4, 8))
 
         status_frame = ttk.Frame(root)
-        status_frame.grid(row=6, column=0, columnspan=2, pady=(0, 4))
+        status_frame.grid(row=7, column=0, columnspan=2, pady=(0, 4))
         ttk.Label(status_frame, text="Progress:").grid(row=0, column=0, sticky="e")
         self.progress_var = tk.StringVar(value="—")
         ttk.Label(status_frame, textvariable=self.progress_var, font=("", 10, "bold")).grid(
@@ -239,7 +257,7 @@ class ConcealerGUI:
 
         self.status_var = tk.StringVar(value="Idle — press Start to begin")
         ttk.Label(root, textvariable=self.status_var, foreground="gray").grid(
-            row=7, column=0, columnspan=2, pady=(0, 12)
+            row=8, column=0, columnspan=2, pady=(0, 12)
         )
 
         self._on_vad_type_change()
@@ -571,8 +589,19 @@ class ConcealerGUI:
 
         try:
             self._write_configs(device_in, device_out)
+            if self.save_recording_var.get():
+                record_mode = "disk"
+                record_outdir = self.output_dir_var.get().strip() or DEFAULT_OUTPUT_DIR
+                # Timestamped so successive recordings never silently
+                # overwrite each other.
+                record_outprefix = "session_" + time.strftime("%Y%m%d_%H%M%S")
+            else:
+                record_mode = "none"
+                record_outdir = None
+                record_outprefix = ""
             self.concealer_stream = Stream(
-                "default_source", "default", "default", "default", is_stream=True
+                "default_source", "default", "default", "default", is_stream=True,
+                record_mode=record_mode, record_outdir=record_outdir, record_outprefix=record_outprefix,
             )
             self.concealer_stream.reset_state()
 
@@ -629,36 +658,57 @@ class ConcealerGUI:
         self._refresh_status()
 
     def _stop(self):
-        """Close the live input/output streams and save the recorded original/concealer/mix WAVs."""
+        """Kick off stopping the live stream in the background (see _stop_worker) and show an immediate "Stopping…" state."""
         if self._refresh_job is not None:
             self.root.after_cancel(self._refresh_job)
             self._refresh_job = None
 
-        self.input_stream.stop()
-        self.input_stream.close()
+        self.start_stop_btn.config(state="disabled", text="Stopping…")
+        self.status_var.set("Stopping…")
+        threading.Thread(target=self._stop_worker, daemon=True).start()
+
+    def _stop_worker(self):
+        """
+        Runs on a background thread, not the Tk main thread: stream.stop()/
+        close() block until any audio callback currently in flight returns,
+        which can take a while if the VAD/denoiser momentarily fell behind
+        real-time - doing that here instead of directly in _stop() keeps the
+        window responsive (showing "Stopping…") instead of freezing solid
+        until it's done.
+        """
+        error = None
+        saved_paths = None
+        try:
+            self.input_stream.stop()
+            self.input_stream.close()
+
+            self.output_stream.stop()
+            self.output_stream.close()
+
+            # Already written incrementally as audio arrived (record_mode=
+            # "disk") - closing the files here is fast regardless of how
+            # long the session was. Returns None if "Save recording" wasn't
+            # checked.
+            saved_paths = self.concealer_stream.finalize_recording()
+        except Exception as e:
+            error = str(e)
+
+        self.root.after(0, self._on_stopped, saved_paths, error)
+
+    def _on_stopped(self, saved_paths, error):
+        """Runs on the Tk main thread once _stop_worker finishes; only now are the stream handles released."""
         self.input_stream = None
-
-        self.output_stream.stop()
-        self.output_stream.close()
         self.output_stream = None
-
-        stream = self.concealer_stream
         self.concealer_stream = None
 
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        if stream.rec_original:
-            original = np.concatenate(stream.rec_original, axis=0).astype(np.float32)
-            concealer = np.concatenate(stream.rec_concealer, axis=0).astype(np.float32)
-            mix = np.concatenate(stream.rec_mix, axis=0).astype(np.float32)
-            sr = stream.stream_config["sr"]
-            sf.write(f"{OUTPUT_DIR}/stream_original.wav", original, sr)
-            sf.write(f"{OUTPUT_DIR}/stream_concealer.wav", concealer, sr)
-            sf.write(f"{OUTPUT_DIR}/stream_mix.wav", mix, sr)
-            self.status_var.set(f"Stopped — saved to {OUTPUT_DIR}")
+        if error is not None:
+            self.status_var.set(f"Stopped with an error: {error}")
+        elif saved_paths is not None:
+            self.status_var.set(f"Stopped — saved to {saved_paths['mix']}")
         else:
-            self.status_var.set("Stopped")
+            self.status_var.set("Stopped — not saved")
 
-        self.start_stop_btn.config(text="Start")
+        self.start_stop_btn.config(text="Start", state="normal")
         self.progress_var.set("—")
         self.latency_var.set("—")
         self.in_level_var.set(0)
@@ -680,6 +730,8 @@ class ConcealerGUI:
         self.vad_param_scale.config(state=scale_state)
         self.denoiser_combo.config(state=combo_state)
         self.ping_btn.config(state="normal" if enabled else "disabled")
+        self.save_check.config(state="normal" if enabled else "disabled")
+        self.output_dir_entry.config(state="normal" if enabled else "disabled")
 
     def _refresh_status(self):
         """Poll the running stream's progress/latency and update the status labels; reschedules itself every 500ms."""

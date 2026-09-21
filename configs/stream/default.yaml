@@ -5,13 +5,9 @@ max_level: 1.0
 sr: 48000
 channels_in: 1
 channels_out: 1
-device_in: 18
-device_out: 18
+device_in: 17
+device_out: 0
 dtype: float32
 buffer_duration: 0.05
-# input_latency / output_latency accept: a number of seconds (a fixed
-# buffer), 'low' / 'high' (the device's own low/high latency preset), or
-# null (no suggested latency at all - PortAudio picks the host API's
-# natural default for the device).
 input_latency: high
 output_latency: null

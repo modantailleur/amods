@@ -328,6 +328,11 @@ conducted at LS2N, LORIA, and IRCAM.
 
 ## Changelog
 
+### 0.1.7
+
+- The GUI's recording is now opt-in
+- Fixed the GUI's Stop button freezing the whole window
+
 ### 0.1.6
 
 - Lowered `numpy`'s dependency floor back to `1.26.4` (from `2.0`)
