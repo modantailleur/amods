@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amods"
-version = "0.1.5"
+version = "0.1.6"
 description = "Adaptive Masking of Distracting Speech (AMODS)"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -27,7 +27,12 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "numpy>=2.0,<3",
+    # 1.24 avoids librosa's excluded 1.22.0-1.22.2 range and satisfies every
+    # other transitive floor (onnxruntime>=1.21.6, scikit-learn>=1.22,
+    # numba>=1.22). Deliberately not raised to >=2.0: amods's own code uses
+    # no numpy-2.0-only API, and a >=2.0 floor would force torch>=2.3 (see
+    # the torch entry below), which has no macOS x86_64 (Intel) wheel at all.
+    "numpy>=1.24,<3",
     # librosa<0.10.2 imports pkg_resources (deprecated, and past setuptools's
     # announced pkg_resources removal-eligible date), which isn't guaranteed
     # present on every interpreter - 0.10.2 dropped that import entirely.
@@ -35,14 +40,16 @@ dependencies = [
     "soundfile>=0.12.1,<0.14",
     "sounddevice>=0.4,<0.6",
     "PyYAML>=6.0,<7",
-    # torch<2.3 can't interoperate with numpy>=2.0 (torch.from_numpy raises
-    # "RuntimeError: Numpy is not available") on any platform - verified
-    # empirically (2.0.0 and 2.2.0 both fail). torch==2.3.0 fixes this on
-    # Linux/macOS but NOT on Windows (confirmed via real Windows CI, not
-    # locally - there's no way to run Windows binaries from this machine);
-    # 2.5.0 is a safety-margin bump pending that CI confirming it's actually
-    # fixed there too.
-    "torch>=2.5.0,<3",
+    # torch<2.3 only interoperates with numpy<2 (torch.from_numpy raises
+    # "RuntimeError: Numpy is not available" otherwise - verified empirically
+    # on 2.0.0 and 2.2.0, and confirmed on real Windows CI too). Rather than
+    # forcing numpy>=2.0 (and losing macOS x86_64/Intel support entirely,
+    # since torch dropped that platform's wheels at 2.3.0 - PyTorch's own
+    # announced, permanent decision), the numpy floor above stays <2-
+    # compatible instead. 2.2.2 is the last release with wheels for every
+    # platform amods supports (Linux/Windows/macOS, both Intel and Apple
+    # Silicon) and every supported Python version.
+    "torch>=2.2.2,<3",
     "denoiser>=0.1.5,<0.2",
     # ten_vad<1.0.6.5's wheel is mistagged py3-none-any but actually bundles
     # a Linux-only compiled .so - it fails to import at all on Windows/macOS.

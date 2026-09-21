@@ -16,7 +16,7 @@ jobs:
         # migrates what "-latest" points to - bump these deliberately. These
         # are what ubuntu-latest/windows-latest/macos-latest resolved to at
         # the time of pinning.
-        os: [ubuntu-24.04, windows-2025, macos-26]
+        os: [ubuntu-24.04, windows-2025, macos-26, macos-26-intel]
         python-version: ["3.10", "3.11", "3.12"]
         # "latest": whatever pip resolves as newest within pyproject.toml's
         # ranges (what a fresh `pip install amods` gets today).

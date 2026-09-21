@@ -4,7 +4,7 @@
 # rather than just being an unverified guess. Keep these in sync with the
 # lower bound of each range in pyproject.toml's [project.dependencies] and
 # [project.optional-dependencies].dev.
-numpy==2.0
+numpy==1.24
 librosa==0.10.2
 soundfile==0.12.1
 sounddevice==0.4
@@ -14,11 +14,11 @@ PyYAML==6.0.1; python_version >= "3.12"
 # e.g. by denoiser and by silero-vad's own import chain), but its compiled
 # extension must exactly match torch's version or it fails at import time
 # with "undefined symbol" - so it's pinned here too, to the version torch
-# actually pairs with. 2.3.0 is amods's real floor (see the comment on
-# torch's own line in pyproject.toml), so no python_version split is needed
-# here - unlike PyYAML above, 2.3.0 already ships cp310/cp311/cp312 wheels.
-torch==2.5.0
-torchaudio==2.5.0
+# actually pairs with. 2.2.2 is amods's real floor (see the comment on
+# torch's own line in pyproject.toml) and already ships cp310/cp311/cp312
+# wheels for every platform, so no further split is needed here.
+torch==2.2.2
+torchaudio==2.2.2
 denoiser==0.1.5
 ten_vad==1.0.6.5
 silero-vad==5.1

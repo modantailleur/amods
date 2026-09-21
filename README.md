@@ -328,6 +328,19 @@ conducted at LS2N, LORIA, and IRCAM.
 
 ## Changelog
 
+### 0.1.6
+
+- Lowered `numpy`'s dependency floor back to `1.24` (from `2.0`): `amods`'s
+  own code never needed `numpy>=2.0`, and requiring it forced `torch>=2.3`
+  too (`torch<2.3` can't interoperate with `numpy>=2.0`), which has no macOS
+  x86_64 (Intel) wheel at all — PyTorch stopped publishing those after
+  `2.2.2`. Paired `torch`'s floor back down to `2.2.2` to match (down from
+  the `2.5.0` set in `0.1.5`), which restores Intel Mac support and is also
+  the last release with wheels for every platform/Python combination
+  `amods` supports.
+- CI now also runs on macOS Intel, alongside the Apple Silicon, Linux, and
+  Windows coverage added in `0.1.5`.
+
 ### 0.1.5
 
 - Documented the Linux-only system library requirements (`libportaudio2`,
@@ -345,8 +358,10 @@ conducted at LS2N, LORIA, and IRCAM.
 - Raised `torch`'s dependency floor to `2.5.0`: `2.3.0` fixed its
   interoperability with `numpy>=2.0` on Linux/macOS, but the same
   `RuntimeError: Numpy is not available` still occurred on Windows.
-- CI now also runs on Windows and macOS, not just Linux (still across both
-  the lowest and newest version each dependency range allows).
+  (Superseded in `0.1.6` — see above.)
+- CI now also runs on Windows and macOS (Apple Silicon), not just Linux —
+  still across both the lowest and newest version each dependency range
+  allows.
 
 ### 0.1.4
 
