@@ -27,16 +27,23 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    # 1.24 avoids librosa's excluded 1.22.0-1.22.2 range and satisfies every
-    # other transitive floor (onnxruntime>=1.21.6, scikit-learn>=1.22,
-    # numba>=1.22). Deliberately not raised to >=2.0: amods's own code uses
-    # no numpy-2.0-only API, and a >=2.0 floor would force torch>=2.3 (see
-    # the torch entry below), which has no macOS x86_64 (Intel) wheel at all.
-    "numpy>=1.24,<3",
+    # 1.26.4 satisfies every transitive floor (onnxruntime>=1.24.2,
+    # scikit-learn>=1.22, numba>=1.22) and is the first 1.x release with a
+    # cp312 wheel (1.24.x/1.25.x predate Python 3.12). Deliberately not
+    # raised to >=2.0: amods's own code uses no numpy-2.0-only API, and a
+    # >=2.0 floor would force torch>=2.3 (see the torch entry below), which
+    # has no macOS x86_64 (Intel) wheel at all.
+    "numpy>=1.26.4,<3",
     # librosa<0.10.2 imports pkg_resources (deprecated, and past setuptools's
     # announced pkg_resources removal-eligible date), which isn't guaranteed
     # present on every interpreter - 0.10.2 dropped that import entirely.
     "librosa>=0.10.2,<0.12",
+    # numba isn't a direct amods dependency (librosa pulls it in), but it's
+    # constrained here anyway: numba>=0.63.0 depends on a llvmlite release
+    # with no macOS x86_64 (Intel) wheel, so it fails to build from source
+    # there. 0.62.1 is the last numba release with wheels for every platform
+    # amods supports.
+    "numba<0.63",
     "soundfile>=0.12.1,<0.14",
     "sounddevice>=0.4,<0.6",
     "PyYAML>=6.0,<7",

@@ -330,14 +330,19 @@ conducted at LS2N, LORIA, and IRCAM.
 
 ### 0.1.6
 
-- Lowered `numpy`'s dependency floor back to `1.24` (from `2.0`): `amods`'s
+- Lowered `numpy`'s dependency floor back to `1.26.4` (from `2.0`): `amods`'s
   own code never needed `numpy>=2.0`, and requiring it forced `torch>=2.3`
   too (`torch<2.3` can't interoperate with `numpy>=2.0`), which has no macOS
   x86_64 (Intel) wheel at all — PyTorch stopped publishing those after
   `2.2.2`. Paired `torch`'s floor back down to `2.2.2` to match (down from
   the `2.5.0` set in `0.1.5`), which restores Intel Mac support and is also
   the last release with wheels for every platform/Python combination
-  `amods` supports.
+  `amods` supports. (`1.26.4`, not `1.24`, since `1.24.x` predates Python
+  3.12 entirely and has no wheel for it.)
+- Constrained `numba` (not a direct dependency — pulled in by `librosa`) to
+  `<0.63`: newer releases depend on a `llvmlite` version with no macOS
+  x86_64 wheel either, which breaks the build there the same way the `torch`
+  issue above did.
 - CI now also runs on macOS Intel, alongside the Apple Silicon, Linux, and
   Windows coverage added in `0.1.5`.
 

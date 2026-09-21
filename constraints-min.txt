@@ -4,7 +4,7 @@
 # rather than just being an unverified guess. Keep these in sync with the
 # lower bound of each range in pyproject.toml's [project.dependencies] and
 # [project.optional-dependencies].dev.
-numpy==1.24
+numpy==1.26.4
 librosa==0.10.2
 soundfile==0.12.1
 sounddevice==0.4
