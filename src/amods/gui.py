@@ -112,6 +112,7 @@ class ConcealerGUI:
         # the mic selector reacts before the user presses Start.
         self._input_monitor = None
         self._ping_stream = None
+        self._ping_busy = False
         self._last_level_ts = {"in": 0.0, "out": 0.0}
 
         style = ttk.Style()
@@ -377,7 +378,11 @@ class ConcealerGUI:
     def _on_input_device_change(self):
         """React to the mic combo changing: refresh warnings and point the idle level monitor at the new device."""
         self._update_warnings()
-        self._restart_input_monitor()
+        # Captured now, on the Tk main thread, since _restart_input_monitor
+        # runs in the background (see its docstring) and can't safely read
+        # the combo box itself.
+        device_in = self._selected_index(self.in_combo, self.in_devices)
+        threading.Thread(target=self._restart_input_monitor, args=(device_in,), daemon=True).start()
 
     # ── Level meters ──────────────────────────────────────────────────────
 
@@ -406,11 +411,18 @@ class ConcealerGUI:
             # window may already be gone; the level update itself is moot.
             pass
 
-    def _start_input_monitor(self):
-        """Open a lightweight input-only stream on the selected mic so its level bar reacts even while idle."""
+    def _start_input_monitor(self, device_in=None):
+        """
+        Open a lightweight input-only stream on the selected mic so its level
+        bar reacts even while idle. Pass ``device_in`` explicitly to call
+        this safely from a background thread (it avoids reading the combo
+        box, which is only safe from the Tk main thread); omitted, it reads
+        the current selection itself (main-thread callers only).
+        """
         if self._input_monitor is not None:
             return
-        device_in = self._selected_index(self.in_combo, self.in_devices)
+        if device_in is None:
+            device_in = self._selected_index(self.in_combo, self.in_devices)
         if device_in is None:
             return
         try:
@@ -423,10 +435,10 @@ class ConcealerGUI:
             # Best-effort preview only - if the device can't be opened here
             # (e.g. it's busy elsewhere), just leave the bar flat at 0.
             self._input_monitor = None
-            self.in_level_var.set(0)
+            self.root.after(0, self.in_level_var.set, 0)
 
     def _stop_input_monitor(self):
-        """Close the idle mic-level stream, e.g. before the real concealer stream opens the same device."""
+        """Close the idle mic-level stream, e.g. before the real concealer stream opens the same device. Safe to call from any thread."""
         if self._input_monitor is not None:
             try:
                 self._input_monitor.stop()
@@ -434,37 +446,65 @@ class ConcealerGUI:
             except Exception:
                 pass
             self._input_monitor = None
-        self.in_level_var.set(0)
+        self.root.after(0, self.in_level_var.set, 0)
 
-    def _restart_input_monitor(self):
+    def _restart_input_monitor(self, device_in=None):
+        """
+        Stop and reopen the idle mic-level monitor. Real device I/O, with
+        the same "can block indefinitely on some devices" risk as Ping (see
+        _ping_worker) - always run this on a background thread, never the
+        Tk main thread.
+        """
         self._stop_input_monitor()
-        self._start_input_monitor()
+        self._start_input_monitor(device_in)
 
     # ── Ping (speaker test tone) ─────────────────────────────────────────
 
     def _on_ping(self):
         """Play a short fade-in/fade-out sine through the selected speaker, animating its level bar."""
-        if self._ping_stream is not None:
-            return  # already playing
+        if self._ping_stream is not None or self._ping_busy:
+            return  # already playing, or a previous attempt is still stuck opening a device
         device_out = self._selected_index(self.out_combo, self.out_devices)
         if device_out is None:
             messagebox.showerror("Granular Speech Masker", "Select a speaker first.")
             return
 
-        # Avoid the same simultaneous-input+output risk _update_warnings warns
-        # about, in case mic and speaker happen to be the same device: release
-        # the idle mic monitor for the duration of the test tone.
-        self._stop_input_monitor()
-        self.ping_btn.config(state="disabled")
-        try:
-            self._play_ping(device_out)
-        except Exception as e:
-            messagebox.showerror("Granular Speech Masker", f"Could not play test tone: {e}")
-            self.ping_btn.config(state="normal")
-            self._start_input_monitor()
+        # Captured now, on the Tk main thread, so the background work below
+        # never needs to touch the combo box itself to know which mic to
+        # release/reopen.
+        device_in = self._selected_index(self.in_combo, self.in_devices)
 
-    def _play_ping(self, device_out):
-        """Build and start playback of the fade-in/fade-out test tone; cleanup happens in its finished_callback."""
+        self._ping_busy = True
+        self.ping_btn.config(state="disabled")
+        threading.Thread(target=self._ping_worker, args=(device_out, device_in), daemon=True).start()
+
+    def _ping_worker(self, device_out, device_in):
+        """
+        Runs entirely on its own background thread, never the Tk main
+        thread: opening (or closing) an audio stream can block indefinitely
+        on some devices - confirmed in practice with a raw ALSA hardware
+        endpoint already claimed by the system's sound server, where
+        sd.OutputStream(...).start() simply never returns. Doing this here
+        instead of on the main thread means a single bad device choice can
+        only get this one Ping attempt stuck - the rest of the app,
+        including trying Ping again with a different device, keeps working,
+        instead of the whole window freezing.
+        """
+        # Avoid the same simultaneous-input+output risk _update_warnings
+        # warns about, in case mic and speaker happen to be the same
+        # device: release the idle mic monitor for the duration of the test
+        # tone.
+        self._stop_input_monitor()
+        try:
+            stream = self._build_ping_stream(device_out, device_in)
+            stream.start()
+        except Exception as e:
+            self.root.after(0, self._on_ping_start_failed, str(e), device_in)
+            return
+        self.root.after(0, self._on_ping_started, stream)
+
+    def _build_ping_stream(self, device_out, device_in):
+        """Construct (but don't start) the fade-in/fade-out test-tone OutputStream; runs on the ping worker thread."""
         sr = int(sd.query_devices(device_out)["default_samplerate"])
         n_samples = int(sr * PING_DURATION_S)
         t = np.arange(n_samples) / sr
@@ -490,19 +530,46 @@ class ConcealerGUI:
                 raise sd.CallbackStop()
 
         def on_finished():
-            def _reset():
-                self._ping_stream = None
-                self.out_level_var.set(0)
-                self.ping_btn.config(state="normal")
-                self._start_input_monitor()
-            self.root.after(0, _reset)
+            # finished_callback runs on PortAudio's own notification thread,
+            # where closing this stream and reopening the idle mic monitor
+            # (both real, possibly-blocking device I/O) aren't safe to do
+            # directly - hand off to a fresh background thread instead.
+            threading.Thread(
+                target=self._ping_close_worker, args=(stream, device_in), daemon=True
+            ).start()
 
         stream = sd.OutputStream(
             samplerate=sr, channels=1, device=device_out,
             callback=callback, finished_callback=on_finished,
         )
+        return stream
+
+    def _ping_close_worker(self, stream, device_in):
+        """Runs on its own background thread: closes the finished ping stream and reopens the idle mic monitor."""
+        try:
+            stream.close()
+        except Exception:
+            pass
+        self._start_input_monitor(device_in)
+        self.root.after(0, self._on_ping_done)
+
+    def _on_ping_started(self, stream):
+        """Runs on the Tk main thread once the ping stream has actually started playing."""
         self._ping_stream = stream
-        stream.start()
+        self._ping_busy = False
+
+    def _on_ping_start_failed(self, error, device_in):
+        """Runs on the Tk main thread if the ping stream failed to start (a quick, non-hanging failure)."""
+        self._ping_busy = False
+        messagebox.showerror("Granular Speech Masker", f"Could not play test tone: {error}")
+        self.ping_btn.config(state="normal")
+        self._start_input_monitor(device_in)
+
+    def _on_ping_done(self):
+        """Runs on the Tk main thread once _ping_close_worker finishes."""
+        self._ping_stream = None
+        self.out_level_var.set(0)
+        self.ping_btn.config(state="normal")
 
     # ── VAD threshold / aggressiveness slider ────────────────────────────
 
