@@ -328,6 +328,11 @@ conducted at LS2N, LORIA, and IRCAM.
 
 ## Changelog
 
+### 0.1.9
+
+- Fixed the GUI freezing when pressing Start, if the selected device blocks
+  on open (the same root cause as the 0.1.8 Ping/mic-device fix)
+
 ### 0.1.8
 
 - Fixed the GUI freezing (sometimes indefinitely) when pressing Ping or
