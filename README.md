@@ -328,6 +328,13 @@ conducted at LS2N, LORIA, and IRCAM.
 
 ## Changelog
 
+### 0.1.8
+
+- Fixed the GUI freezing (sometimes indefinitely) when pressing Ping or
+  changing the mic device
+- Fixed the Ping button leaking an audio stream on every press, and getting
+  permanently stuck disabled after a failed attempt.
+
 ### 0.1.7
 
 - The GUI's recording is now opt-in
