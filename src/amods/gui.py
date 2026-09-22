@@ -113,6 +113,7 @@ class ConcealerGUI:
         self._input_monitor = None
         self._ping_stream = None
         self._ping_busy = False
+        self._start_busy = False
         self._last_level_ts = {"in": 0.0, "out": 0.0}
 
         style = ttk.Style()
@@ -625,7 +626,9 @@ class ConcealerGUI:
             self._start()
 
     def _start(self):
-        """Validate the selected devices, persist the current settings, and open the live input/output streams."""
+        """Validate the selected devices, persist the current settings, build the Stream, and kick off opening the live input/output streams in the background."""
+        if self._start_busy:
+            return
         device_in = self._selected_index(self.in_combo, self.in_devices)
         device_out = self._selected_index(self.out_combo, self.out_devices)
 
@@ -641,19 +644,6 @@ class ConcealerGUI:
                 "systems. Starting anyway.",
             )
 
-        # Release the idle mic-level preview stream so the real InputStream
-        # below can open the same device, and cut off a still-playing Ping
-        # test tone so it doesn't hold the speaker device open too.
-        self._stop_input_monitor()
-        if self._ping_stream is not None:
-            try:
-                self._ping_stream.abort()
-                self._ping_stream.close()
-            except Exception:
-                pass
-            self._ping_stream = None
-            self.out_level_var.set(0)
-
         try:
             self._write_configs(device_in, device_out)
             if self.save_recording_var.get():
@@ -666,22 +656,56 @@ class ConcealerGUI:
                 record_mode = "none"
                 record_outdir = None
                 record_outprefix = ""
-            self.concealer_stream = Stream(
+            concealer_stream = Stream(
                 "default_source", "default", "default", "default", is_stream=True,
                 record_mode=record_mode, record_outdir=record_outdir, record_outprefix=record_outprefix,
             )
-            self.concealer_stream.reset_state()
+            concealer_stream.reset_state()
+        except Exception as e:
+            messagebox.showerror("Granular Speech Masker", f"Failed to start: {e}")
+            return
 
-            stream_config = self.concealer_stream.stream_config
+        self._start_busy = True
+        self.start_stop_btn.config(state="disabled", text="Starting…")
+        threading.Thread(
+            target=self._start_worker, args=(concealer_stream, device_in, device_out), daemon=True
+        ).start()
 
-            def input_callback_with_meter(indata, frames, time_info, status):
-                self.concealer_stream.input_callback(indata, frames, time_info, status)
-                self._push_level("in", self.in_level_var, indata)
+    def _start_worker(self, concealer_stream, device_in, device_out):
+        """
+        Runs entirely on its own background thread, never the Tk main
+        thread: opening an audio stream can block indefinitely on some
+        devices (confirmed in practice - see the comment in _ping_worker
+        for the reproduced case). Keeping every sd.*Stream(...) call off
+        the main thread means a bad device choice can only get this one
+        Start attempt stuck, instead of freezing the whole window.
+        """
+        # Release the idle mic-level preview stream so the real InputStream
+        # below can open the same device, and cut off a still-playing Ping
+        # test tone so it doesn't hold the speaker device open too.
+        self._stop_input_monitor()
+        if self._ping_stream is not None:
+            try:
+                self._ping_stream.abort()
+                self._ping_stream.close()
+            except Exception:
+                pass
+            self._ping_stream = None
+            self.root.after(0, self.out_level_var.set, 0)
 
-            def output_callback_with_meter(outdata, frames, time_info, status):
-                self.concealer_stream.output_callback(outdata, frames, time_info, status)
-                self._push_level("out", self.out_level_var, outdata)
+        stream_config = concealer_stream.stream_config
 
+        def input_callback_with_meter(indata, frames, time_info, status):
+            concealer_stream.input_callback(indata, frames, time_info, status)
+            self._push_level("in", self.in_level_var, indata)
+
+        def output_callback_with_meter(outdata, frames, time_info, status):
+            concealer_stream.output_callback(outdata, frames, time_info, status)
+            self._push_level("out", self.out_level_var, outdata)
+
+        input_stream = None
+        output_stream = None
+        try:
             # Two independent streams instead of one combined duplex stream:
             # the input side keeps the algorithm's fixed ~50ms blocksize
             # (needed for VAD/feature extraction), while the output stream is
@@ -689,16 +713,16 @@ class ConcealerGUI:
             # backend prefers, instead of both directions sharing one
             # buffering granularity. They're connected by a ring buffer (see
             # Stream.input_callback/output_callback in amods.stream).
-            self.input_stream = sd.InputStream(
+            input_stream = sd.InputStream(
                 samplerate=stream_config["sr"],
-                blocksize=self.concealer_stream.buffer_size,
+                blocksize=concealer_stream.buffer_size,
                 dtype=stream_config["dtype"],
                 channels=stream_config["channels_in"],
                 device=stream_config["device_in"],
                 callback=input_callback_with_meter,
                 latency=stream_config.get("input_latency", "low"),
             )
-            self.output_stream = sd.OutputStream(
+            output_stream = sd.OutputStream(
                 samplerate=stream_config["sr"],
                 dtype=stream_config["dtype"],
                 channels=stream_config["channels_out"],
@@ -706,23 +730,40 @@ class ConcealerGUI:
                 callback=output_callback_with_meter,
                 latency=stream_config.get("output_latency", "high"),
             )
-            self.input_stream.start()
-            self.output_stream.start()
+            input_stream.start()
+            output_stream.start()
         except Exception as e:
-            messagebox.showerror("Granular Speech Masker", f"Failed to start: {e}")
-            if self.input_stream is not None:
-                self.input_stream.close()
-            if self.output_stream is not None:
-                self.output_stream.close()
-            self.input_stream = None
-            self.output_stream = None
-            self.concealer_stream = None
-            self._start_input_monitor()
+            if input_stream is not None:
+                try:
+                    input_stream.close()
+                except Exception:
+                    pass
+            if output_stream is not None:
+                try:
+                    output_stream.close()
+                except Exception:
+                    pass
+            self.root.after(0, self._on_start_failed, str(e), device_in)
             return
 
-        self.start_stop_btn.config(text="Stop")
+        self.root.after(0, self._on_started, concealer_stream, input_stream, output_stream)
+
+    def _on_started(self, concealer_stream, input_stream, output_stream):
+        """Runs on the Tk main thread once the real input/output streams have actually started."""
+        self.concealer_stream = concealer_stream
+        self.input_stream = input_stream
+        self.output_stream = output_stream
+        self._start_busy = False
+        self.start_stop_btn.config(text="Stop", state="normal")
         self._set_controls_enabled(False)
         self._refresh_status()
+
+    def _on_start_failed(self, error, device_in):
+        """Runs on the Tk main thread if opening the real streams failed outright (a quick, non-hanging failure)."""
+        self._start_busy = False
+        messagebox.showerror("Granular Speech Masker", f"Failed to start: {error}")
+        self.start_stop_btn.config(text="Start", state="normal")
+        self._start_input_monitor(device_in)
 
     def _stop(self):
         """Kick off stopping the live stream in the background (see _stop_worker) and show an immediate "Stopping…" state."""
