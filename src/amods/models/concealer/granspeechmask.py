@@ -78,12 +78,28 @@ class GranSpeechMask(GranSpeechMaskCM):
         self.stop_processing = False
         self.cur_concealing = False
         self.concealing_countdown = 0  # samples
+        # In streaming mode, pending_voice is a rolling window that's never
+        # cleared after a feed (unlike file mode - see _feed_memory), so it
+        # sits at its ~2s cap continuously once full. Without this counter,
+        # update_memory's own "is there 2s pending" check would stay true
+        # forever after the first feed, re-triggering _feed_memory again
+        # the instant the previous background feed finishes - on an
+        # almost-unchanged window, barely shifted by however little audio
+        # arrived in between. That flooded memory with near-duplicate
+        # clips, and (worse) let concealing clips selected close together
+        # end up with very different absolute levels, since each is
+        # independently RMS-matched to pending_voice at its own selection
+        # moment - audible as clicking/pumping, especially at high gain.
+        # Requiring a full new pending_voice_max_duration worth of audio
+        # since the last feed forces genuinely fresh material each time.
+        self.new_voice_since_feed = 0
 
     def update(self, x):
         """While speech is active: extend the pending-voice window with ``x`` and count down any active concealing cooldown."""
         self.pending_voice.extend(x)
         while len(self.pending_voice) > int(self.pending_voice_max_duration * self.sr):
             self.pending_voice.popleft()
+        self.new_voice_since_feed += len(x)
 
         if self.cur_concealing:
             self.concealing_countdown -= len(x)
@@ -111,7 +127,15 @@ class GranSpeechMask(GranSpeechMaskCM):
             self.cur_size_before_update_memory = 0
 
         if not self.freeze_learning:
-            if (not self.stop_processing) and len(self.pending_voice) >= int(self.pending_voice_max_duration * self.sr):
+            pending_voice_full = len(self.pending_voice) >= int(self.pending_voice_max_duration * self.sr)
+            # File mode already gets a fresh window for free (pending_voice
+            # is cleared after every feed there - see _feed_memory), so
+            # "full" alone is a correct, sufficient trigger. Streaming mode
+            # needs the extra new_voice_since_feed check (see __init__).
+            has_fresh_material = (
+                not self.is_stream or self.new_voice_since_feed >= int(self.pending_voice_max_duration * self.sr)
+            )
+            if (not self.stop_processing) and pending_voice_full and has_fresh_material:
                 self.stop_processing = True
                 if self.is_stream:
                     bg_thread = threading.Thread(target=self._background_task, daemon=True)
@@ -193,6 +217,7 @@ class GranSpeechMask(GranSpeechMaskCM):
 
         if not self.is_stream:
             self.pending_voice.clear()
+        self.new_voice_since_feed = 0
         self.stop_processing = False
 
     def learn(self, y, voice_name=None):

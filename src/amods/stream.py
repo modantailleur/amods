@@ -109,6 +109,14 @@ class Stream:
         self.concealer_config["pending_conc_max_size"] = self.pending_conc_max_size
         self.pending_conc = np.zeros(self.pending_conc_max_size, dtype=np.float32)
 
+        # Gain state carried across chunks so limit_peak's ramp stays
+        # continuous from one call to the next instead of snapping to a
+        # freshly-computed value each time (see its docstring) - one per
+        # signal path, since play_mix and the recorded mix can need
+        # different amounts of limiting at any given moment.
+        self._play_mix_gain = 1.0
+        self._rec_mix_gain = 1.0
+
         # Derived sizes
         self.buffer_size = int(self.stream_config["sr"] * self.stream_config["buffer_duration"])
 
@@ -208,11 +216,15 @@ class Stream:
 
         # ---- Build playback output (what you hear) ----
         play_mic = self.stream_config["monitor_gain"] * x
-        play_mix = limit_peak(play_mic + conc_block, limit=0.95)
+        play_mix, self._play_mix_gain = limit_peak(
+            play_mic + conc_block, limit=0.95, prev_gain=self._play_mix_gain, sr=self.stream_config["sr"]
+        )
 
         # ---- Build recorded mix (what goes into *_mix.wav) ----
         rec_mic = self.stream_config["record_mic_gain"] * x
-        rec_mix_mono = limit_peak(rec_mic + conc_block, limit=0.95)
+        rec_mix_mono, self._rec_mix_gain = limit_peak(
+            rec_mic + conc_block, limit=0.95, prev_gain=self._rec_mix_gain, sr=self.stream_config["sr"]
+        )
 
         # ---- Record (shared) ----
         if self.record_mode == "memory":
@@ -292,6 +304,8 @@ class Stream:
     def reset_state(self):
         """Reset all algorithm state + recording buffers."""
         self.pending_conc = np.zeros(self.pending_conc_max_size, dtype=np.float32)
+        self._play_mix_gain = 1.0
+        self._rec_mix_gain = 1.0
 
         self.rec_original.clear()
         self.rec_concealer.clear()
