@@ -265,7 +265,7 @@ class ConcealerGUI:
         # "Concealer level" can sit beside it, in column 1, at the same row
         # - both given sticky="nsew" so they stretch to match each other's
         # height exactly, however tall the taller one naturally is.
-        vad_frame = ttk.LabelFrame(root, text="VAD settings")
+        vad_frame = ttk.LabelFrame(root, text="Concealer controls")
         vad_frame.grid(row=3, column=0, sticky="nsew", **pad)
 
         ttk.Label(vad_frame, text="VAD type").grid(row=0, column=0, sticky="w", **pad)
