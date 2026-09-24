@@ -4,8 +4,14 @@ import math
 import numpy as np
 
 
+def _raised_cosine_in(fade_size: int) -> np.ndarray:
+    """Half-Hann fade-in ramp: 0 -> 1 with zero slope at both ends, unlike a linear ramp's sharp corners."""
+    t = np.linspace(0.0, 1.0, fade_size, dtype=np.float64)
+    return 0.5 * (1.0 - np.cos(np.pi * t))
+
+
 def apply_fade(x: np.ndarray, fade_size: int) -> np.ndarray:
-    """Apply a linear fade-in and fade-out to both ends of ``x``."""
+    """Apply a raised-cosine (half-Hann) fade-in and fade-out to both ends of ``x``."""
     n = len(x)
     if fade_size <= 0 or n < 2:
         return x
@@ -13,15 +19,14 @@ def apply_fade(x: np.ndarray, fade_size: int) -> np.ndarray:
     if fade_size <= 0:
         return x
     y = x.copy()
-    fade_in = np.linspace(0.0, 1.0, fade_size, dtype=y.dtype)
-    fade_out = np.linspace(1.0, 0.0, fade_size, dtype=y.dtype)
-    y[:fade_size] *= fade_in
-    y[-fade_size:] *= fade_out
+    ramp = _raised_cosine_in(fade_size)
+    y[:fade_size] *= ramp.astype(y.dtype)
+    y[-fade_size:] *= ramp[::-1].astype(y.dtype)
     return y
 
 
 def apply_fade_in(x: np.ndarray, fade_size: int) -> np.ndarray:
-    """Apply a linear fade-in to the start of ``x``."""
+    """Apply a raised-cosine (half-Hann) fade-in to the start of ``x``."""
     n = len(x)
     if fade_size <= 0 or n < 2:
         return x
@@ -29,13 +34,12 @@ def apply_fade_in(x: np.ndarray, fade_size: int) -> np.ndarray:
     if fade_size <= 0:
         return x
     y = x.copy()
-    fade_in = np.linspace(0.0, 1.0, fade_size, dtype=y.dtype)
-    y[:fade_size] *= fade_in
+    y[:fade_size] *= _raised_cosine_in(fade_size).astype(y.dtype)
     return y
 
 
 def apply_fade_out(x: np.ndarray, fade_size: int) -> np.ndarray:
-    """Apply a linear fade-out to the end of ``x``."""
+    """Apply a raised-cosine (half-Hann) fade-out to the end of ``x``."""
     n = len(x)
     if fade_size <= 0 or n < 2:
         return x
@@ -43,8 +47,7 @@ def apply_fade_out(x: np.ndarray, fade_size: int) -> np.ndarray:
     if fade_size <= 0:
         return x
     y = x.copy()
-    fade_out = np.linspace(1.0, 0.0, fade_size, dtype=y.dtype)
-    y[-fade_size:] *= fade_out
+    y[-fade_size:] *= _raised_cosine_in(fade_size)[::-1].astype(y.dtype)
     return y
 
 

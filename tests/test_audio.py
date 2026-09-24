@@ -18,6 +18,21 @@ def test_apply_fade_out_ramps_to_zero():
     assert np.all(y[:90] == 1.0)
 
 
+def test_apply_fade_in_uses_raised_cosine_not_linear():
+    # A linear and a raised-cosine ramp coincidentally agree at the very
+    # ends (0, 1) and the midpoint (0.5), so check a point off-center: at
+    # 1/4 of the way through, raised-cosine sits well below where a linear
+    # ramp would (0.146 vs 0.25) - the whole point of the smoother curve
+    # being zero-slope (flatter) right where it leaves silence.
+    x = np.ones(300, dtype=np.float32)  # long enough that fade_size=100 isn't clamped to n//2
+    y = apply_fade_in(x, 100)
+    quarter_point = y[24]
+    linear_value = 0.25
+    raised_cosine_value = 0.5 * (1 - np.cos(np.pi * 0.25))
+    assert not np.isclose(quarter_point, linear_value, atol=0.02)
+    assert np.isclose(quarter_point, raised_cosine_value, atol=0.02)
+
+
 def test_apply_fade_does_both_ends():
     x = np.ones(100, dtype=np.float32)
     y = apply_fade(x, 10)
