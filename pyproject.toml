@@ -74,6 +74,15 @@ dependencies = [
     # already imports it lazily and the "webrtc" VAD type just isn't
     # available there (use "silero" or "ten" instead).
     "webrtcvad>=2.0.7,<3; sys_platform != 'win32'",
+    # webrtcvad's own module-level code still calls pkg_resources.get_
+    # distribution() to set its __version__ at import time - setuptools>=82
+    # dropped the pkg_resources module entirely (verified directly:
+    # 81.0.0 still has it, 82.0.0 raises ModuleNotFoundError), which breaks
+    # `import webrtcvad` outright. Not needed on Windows, since webrtcvad
+    # isn't installed there at all (see its own entry above). setuptools's
+    # own deprecation warning gives this exact same advice: "pin to
+    # Setuptools<81".
+    "setuptools<81; sys_platform != 'win32'",
     "onnxruntime>=1.18.0,<2",
 ]
 
