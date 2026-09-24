@@ -336,15 +336,26 @@ class ConcealerGUI:
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _on_close(self):
-        """Release any open audio stream before the window actually closes."""
-        self._stop_input_monitor()
-        if self._ping_stream is not None:
-            try:
-                self._ping_stream.abort()
-                self._ping_stream.close()
-            except Exception:
-                pass
+        """
+        Close the window and hard-exit the process immediately, bypassing
+        Python's normal interpreter shutdown entirely.
+
+        A background thread closing streams (an earlier version of this)
+        isn't enough: sounddevice itself registers an atexit hook
+        (_exit_handler) that calls .stop()/.close() again on the
+        most-recently-used stream during normal shutdown - on the main
+        thread, after main() returns, completely outside our control. If
+        that device blocks (the same "device I/O can hang forever" issue as
+        Ping/Start - see _ping_worker), the interpreter hangs there in
+        native code, which even Ctrl+C can't interrupt (SIGINT is only
+        handled between Python bytecode instructions, never inside a
+        blocked C call). os._exit() skips atexit handlers and all other
+        Python-level cleanup, so nothing sounddevice does afterwards can
+        block process exit - the OS reclaims every audio device handle when
+        the process actually terminates anyway.
+        """
         self.root.destroy()
+        os._exit(0)
 
     # ── Model prefetch ───────────────────────────────────────────────────
 
