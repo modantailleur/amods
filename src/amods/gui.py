@@ -262,19 +262,41 @@ class ConcealerGUI:
         self.vad_type_combo.grid(row=0, column=1, sticky="w", **pad)
         self.vad_type_combo.bind("<<ComboboxSelected>>", lambda e: self._on_vad_type_change())
 
-        self.vad_param_label_var = tk.StringVar(value="Threshold")
-        ttk.Label(vad_frame, textvariable=self.vad_param_label_var).grid(
+        # Two independent sliders sharing the one VAD type above: "Concealing
+        # rate" drives the real-time source VAD (when concealing actually
+        # starts), "Concealer memory rate" drives the concealer's own VAD in
+        # its background/parallel branch (how readily a recorded clip is
+        # accepted into its memory of candidate clips - see
+        # GranSpeechMask._feed_memory). Both are shown, and stored in
+        # _write_configs, as 1 - the underlying VAD threshold: higher slider
+        # value = more lenient = more concealing / more clips accepted.
+        self.concealing_rate_label_var = tk.StringVar(value="Concealing rate")
+        ttk.Label(vad_frame, textvariable=self.concealing_rate_label_var).grid(
             row=1, column=0, sticky="w", **pad
         )
-        self.vad_param_var = tk.DoubleVar(value=0.5)
-        self.vad_param_value_label = ttk.Label(vad_frame, text="0.5")
-        self.vad_param_value_label.grid(row=1, column=2, sticky="w")
-        self.vad_param_scale = tk.Scale(
+        self.concealing_rate_var = tk.DoubleVar(value=0.5)
+        self.concealing_rate_value_label = ttk.Label(vad_frame, text="0.5")
+        self.concealing_rate_value_label.grid(row=1, column=2, sticky="w")
+        self.concealing_rate_scale = tk.Scale(
             vad_frame, from_=0.1, to=0.9, resolution=0.1, orient="horizontal",
-            variable=self.vad_param_var, showvalue=False, length=200,
-            command=lambda v: self.vad_param_value_label.config(text=v),
+            variable=self.concealing_rate_var, showvalue=False, length=200,
+            command=lambda v: self.concealing_rate_value_label.config(text=v),
         )
-        self.vad_param_scale.grid(row=1, column=1, **pad)
+        self.concealing_rate_scale.grid(row=1, column=1, **pad)
+
+        self.concealer_memory_rate_label_var = tk.StringVar(value="Concealer memory rate")
+        ttk.Label(vad_frame, textvariable=self.concealer_memory_rate_label_var).grid(
+            row=2, column=0, sticky="w", **pad
+        )
+        self.concealer_memory_rate_var = tk.DoubleVar(value=0.5)
+        self.concealer_memory_rate_value_label = ttk.Label(vad_frame, text="0.5")
+        self.concealer_memory_rate_value_label.grid(row=2, column=2, sticky="w")
+        self.concealer_memory_rate_scale = tk.Scale(
+            vad_frame, from_=0.1, to=0.9, resolution=0.1, orient="horizontal",
+            variable=self.concealer_memory_rate_var, showvalue=False, length=200,
+            command=lambda v: self.concealer_memory_rate_value_label.config(text=v),
+        )
+        self.concealer_memory_rate_scale.grid(row=2, column=1, **pad)
 
         # ── Denoiser ─────────────────────────────────────────────────────
         denoiser_frame = ttk.LabelFrame(root, text="Denoiser")
@@ -672,19 +694,29 @@ class ConcealerGUI:
     # ── VAD threshold / aggressiveness slider ────────────────────────────
 
     def _on_vad_type_change(self):
-        """Reconfigure the threshold/aggressiveness slider's range and default for the newly selected VAD type."""
+        """Reconfigure both rate/aggressiveness sliders' range and default for the newly selected VAD type."""
         vad_type = self.vad_type_var.get()
-        if vad_type == "webrtc":
-            self.vad_param_label_var.set("Aggressiveness")
-            self.vad_param_scale.config(from_=0, to=3, resolution=1)
-            self.vad_param_var.set(3)
-            self.vad_param_value_label.config(text="3")
-        else:
-            default_threshold = 0.5
-            self.vad_param_label_var.set("Threshold")
-            self.vad_param_scale.config(from_=0.1, to=0.9, resolution=0.1)
-            self.vad_param_var.set(default_threshold)
-            self.vad_param_value_label.config(text=str(default_threshold))
+        for label_var, rate_var, scale, value_label, default_label in (
+            (self.concealing_rate_label_var, self.concealing_rate_var,
+             self.concealing_rate_scale, self.concealing_rate_value_label, "Concealing rate"),
+            (self.concealer_memory_rate_label_var, self.concealer_memory_rate_var,
+             self.concealer_memory_rate_scale, self.concealer_memory_rate_value_label, "Concealer memory rate"),
+        ):
+            if vad_type == "webrtc":
+                # webrtc has no user-adjustable threshold to invert into a
+                # "rate" (see _write_configs) - aggressiveness is its own,
+                # separate, already-direction-appropriate knob (higher =
+                # stricter), so it's shown and stored as-is.
+                label_var.set("Aggressiveness")
+                scale.config(from_=0, to=3, resolution=1)
+                rate_var.set(3)
+                value_label.config(text="3")
+            else:
+                default_rate = 0.5
+                label_var.set(default_label)
+                scale.config(from_=0.1, to=0.9, resolution=0.1)
+                rate_var.set(default_rate)
+                value_label.config(text=str(default_rate))
 
     # ── Config writing ────────────────────────────────────────────────────
 
@@ -705,14 +737,18 @@ class ConcealerGUI:
         save_yaml(concealer_path, concealer_config)
 
         vad_type = self.vad_type_var.get()
-        vad_config = {"vad_type": vad_type}
-        if vad_type == "webrtc":
-            vad_config["logit_threshold"] = WEBRTC_DEFAULT_LOGIT_THRESHOLD
-            vad_config["aggressiveness"] = int(self.vad_param_var.get())
-        else:
-            vad_config["logit_threshold"] = round(float(self.vad_param_var.get()), 1)
-        save_yaml(_writable_config_path("vad", "default_source.yaml"), vad_config)
-        save_yaml(_writable_config_path("vad", "default_concealer.yaml"), vad_config)
+
+        def build_vad_config(rate_var):
+            config = {"vad_type": vad_type}
+            if vad_type == "webrtc":
+                config["logit_threshold"] = WEBRTC_DEFAULT_LOGIT_THRESHOLD
+                config["aggressiveness"] = int(rate_var.get())
+            else:
+                config["logit_threshold"] = round(1.0 - float(rate_var.get()), 1)
+            return config
+
+        save_yaml(_writable_config_path("vad", "default_source.yaml"), build_vad_config(self.concealing_rate_var))
+        save_yaml(_writable_config_path("vad", "default_concealer.yaml"), build_vad_config(self.concealer_memory_rate_var))
 
     # ── Start / Stop ──────────────────────────────────────────────────────
 
@@ -933,7 +969,8 @@ class ConcealerGUI:
         self.in_combo.config(state=combo_state)
         self.out_combo.config(state=combo_state)
         self.vad_type_combo.config(state=combo_state)
-        self.vad_param_scale.config(state=scale_state)
+        self.concealing_rate_scale.config(state=scale_state)
+        self.concealer_memory_rate_scale.config(state=scale_state)
         self.denoiser_combo.config(state=combo_state)
         self.ping_btn.config(state="normal" if enabled else "disabled")
         self.output_latency_scale.config(state=scale_state)
