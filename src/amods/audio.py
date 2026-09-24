@@ -46,6 +46,16 @@ def apply_fade_out(x: np.ndarray, fade_size: int) -> np.ndarray:
     return y
 
 
-def soft_clip(x: np.ndarray, limit: float = 0.95) -> np.ndarray:
-    """Hard-limit ``x`` to ``[-limit, limit]``."""
-    return np.clip(x, -limit, limit)
+def limit_peak(x: np.ndarray, limit: float = 0.95) -> np.ndarray:
+    """
+    Scale ``x`` down so its peak absolute value never exceeds ``limit``,
+    left unchanged if it's already within range. Unlike hard-clipping
+    (``np.clip``), this preserves the waveform's shape - every sample gets
+    scaled by the same factor, instead of just flattening whichever
+    samples exceed the limit - so it never actually saturates/distorts,
+    only ever gets quieter when it would have.
+    """
+    peak = np.max(np.abs(x))
+    if peak <= limit or peak == 0:
+        return x
+    return x * (limit / peak)

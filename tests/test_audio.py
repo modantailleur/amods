@@ -1,6 +1,6 @@
 import numpy as np
 
-from amods.audio import apply_fade, apply_fade_in, apply_fade_out, soft_clip
+from amods.audio import apply_fade, apply_fade_in, apply_fade_out, limit_peak
 
 
 def test_apply_fade_in_ramps_from_zero():
@@ -49,10 +49,25 @@ def test_apply_fade_noop_on_short_or_zero_size():
     assert np.array_equal(apply_fade_out(x, 0), x)
 
 
-def test_soft_clip_limits_amplitude():
+def test_limit_peak_scales_down_when_over_limit():
     x = np.array([-2.0, -0.5, 0.0, 0.5, 2.0], dtype=np.float32)
-    y = soft_clip(x, limit=0.95)
+    y = limit_peak(x, limit=0.95)
     assert np.all(y <= 0.95)
     assert np.all(y >= -0.95)
-    assert y[1] == -0.5
-    assert y[3] == 0.5
+    # scaled proportionally, not flattened: the peak lands exactly on the
+    # limit, and every sample keeps the same ratio to the others as before
+    assert np.isclose(np.max(np.abs(y)), 0.95)
+    expected_scale = 0.95 / 2.0
+    assert np.allclose(y, x * expected_scale)
+
+
+def test_limit_peak_leaves_in_range_signal_unchanged():
+    x = np.array([-0.5, 0.0, 0.5, 0.9], dtype=np.float32)
+    y = limit_peak(x, limit=0.95)
+    assert np.array_equal(y, x)
+
+
+def test_limit_peak_handles_all_zero_input():
+    x = np.zeros(10, dtype=np.float32)
+    y = limit_peak(x, limit=0.95)
+    assert np.array_equal(y, x)

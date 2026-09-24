@@ -5,7 +5,7 @@ import time as _time
 import numpy as np
 import soundfile as sf
 
-from .audio import soft_clip
+from .audio import limit_peak
 from .config import resolve_config
 from .models.concealer import select_concealer_model
 from .models.forecaster import select_forecaster_model
@@ -208,11 +208,11 @@ class Stream:
 
         # ---- Build playback output (what you hear) ----
         play_mic = self.stream_config["monitor_gain"] * x
-        play_mix = soft_clip(play_mic + conc_block, limit=0.95)
+        play_mix = limit_peak(play_mic + conc_block, limit=0.95)
 
         # ---- Build recorded mix (what goes into *_mix.wav) ----
         rec_mic = self.stream_config["record_mic_gain"] * x
-        rec_mix_mono = soft_clip(rec_mic + conc_block, limit=0.95)
+        rec_mix_mono = limit_peak(rec_mic + conc_block, limit=0.95)
 
         # ---- Record (shared) ----
         if self.record_mode == "memory":

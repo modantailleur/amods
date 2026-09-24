@@ -52,6 +52,17 @@ OUTPUT_LATENCY_MAX_MS = 200
 OUTPUT_LATENCY_STEP_MS = 5
 OUTPUT_LATENCY_DEFAULT_MS = 80
 
+# Concealer-level fader: a dB-scaled gain control, matching Audacity's own
+# per-track Gain slider range (-36 dB to +36 dB) exactly - linear in dB, so
+# equal slider movement means equal *perceived* loudness change, unlike a
+# plain linear percentage. Boosting this high can genuinely drive the
+# signal into the final limiter (amods.audio.limit_peak) rather than just
+# getting louder - that's expected: the limiter scales the waveform down
+# to fit rather than clipping it, so it never actually saturates/distorts,
+# no matter how far this is pushed.
+CONC_LEVEL_MIN_DB = -36
+CONC_LEVEL_MAX_DB = 36
+
 
 class _Tooltip:
     """Minimal hover tooltip: shows `text` in a small borderless window near `widget` while the mouse is over it."""
@@ -250,8 +261,12 @@ class ConcealerGUI:
         self.feedback_warning.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10)
 
         # ── VAD settings ─────────────────────────────────────────────────
+        # Only spans column 0 (not both, like every other section) so
+        # "Concealer level" can sit beside it, in column 1, at the same row
+        # - both given sticky="nsew" so they stretch to match each other's
+        # height exactly, however tall the taller one naturally is.
         vad_frame = ttk.LabelFrame(root, text="VAD settings")
-        vad_frame.grid(row=3, column=0, columnspan=2, sticky="ew", **pad)
+        vad_frame.grid(row=3, column=0, sticky="nsew", **pad)
 
         ttk.Label(vad_frame, text="VAD type").grid(row=0, column=0, sticky="w", **pad)
         self.vad_type_var = tk.StringVar(value="ten")
@@ -279,7 +294,7 @@ class ConcealerGUI:
         self.concealing_rate_value_label.grid(row=1, column=2, sticky="w")
         self.concealing_rate_scale = tk.Scale(
             vad_frame, from_=0.1, to=0.9, resolution=0.1, orient="horizontal",
-            variable=self.concealing_rate_var, showvalue=False, length=200,
+            variable=self.concealing_rate_var, showvalue=False, length=230,
             command=lambda v: self.concealing_rate_value_label.config(text=v),
         )
         self.concealing_rate_scale.grid(row=1, column=1, **pad)
@@ -293,10 +308,49 @@ class ConcealerGUI:
         self.concealer_memory_rate_value_label.grid(row=2, column=2, sticky="w")
         self.concealer_memory_rate_scale = tk.Scale(
             vad_frame, from_=0.1, to=0.9, resolution=0.1, orient="horizontal",
-            variable=self.concealer_memory_rate_var, showvalue=False, length=200,
+            variable=self.concealer_memory_rate_var, showvalue=False, length=230,
             command=lambda v: self.concealer_memory_rate_value_label.config(text=v),
         )
         self.concealer_memory_rate_scale.grid(row=2, column=1, **pad)
+
+        # ── Concealer level ──────────────────────────────────────────────
+        # A vertical fader - the most immediately recognizable "level"
+        # control in audio software (mixing console channel strips, DAWs).
+        # Raising it increases the concealer's own gain (Stream's
+        # conc_multiplier); the final mix already runs through a limiter
+        # (see amods.audio.limit_peak), so this changes loudness without
+        # ever hard-clipping/distorting, no matter how high it's pushed.
+        # Sits beside VAD settings (column 1, same row) - see the sticky
+        # comment on vad_frame above for why they end up the same height.
+        # Its contents are pack()ed (not grid()ed) so they land centered
+        # horizontally, rather than pinned to one side of a possibly wider
+        # box than the fader itself needs.
+        level_frame = ttk.LabelFrame(root, text="Concealer level")
+        # "ns" only (no horizontal stretch): the column ends up wider than
+        # this frame actually needs, since it also has to fit the wide
+        # devices_frame row above - "nsew" would stretch this box to fill
+        # that whole column instead of staying just wide enough for its own
+        # content ("Concealer level" is what ends up setting its width).
+        level_frame.grid(row=3, column=1, sticky="ns", **pad)
+
+        self.conc_level_value_label = ttk.Label(level_frame, text="")
+        self.conc_level_value_label.pack(pady=(4, 0))
+
+        # Starts at whatever conc_multiplier is currently configured (the
+        # same resolution order Stream itself uses - local ./configs/, then
+        # ~/.amods/configs/, then the bundled default), not a hardcoded
+        # value, so the fader always reflects the level already in effect.
+        default_conc_multiplier = load_config("stream", "default").get("conc_multiplier", 1.0)
+        default_conc_db = 20.0 * np.log10(max(default_conc_multiplier, 1e-6))
+        default_conc_db = max(CONC_LEVEL_MIN_DB, min(CONC_LEVEL_MAX_DB, default_conc_db))
+        self.conc_level_var = tk.DoubleVar(value=round(default_conc_db))
+        self.conc_level_scale = tk.Scale(
+            level_frame, from_=CONC_LEVEL_MAX_DB, to=CONC_LEVEL_MIN_DB, resolution=1,
+            orient="vertical", showvalue=False, length=110,
+            variable=self.conc_level_var, command=self._on_conc_level_change,
+        )
+        self.conc_level_scale.pack(expand=True, pady=(0, 8))
+        self._on_conc_level_change(self.conc_level_var.get())
 
         # ── Denoiser ─────────────────────────────────────────────────────
         denoiser_frame = ttk.LabelFrame(root, text="Denoiser")
@@ -499,6 +553,21 @@ class ConcealerGUI:
     def _on_output_latency_change(self, value):
         """Update the little "XX ms" label next to the latency slider as it moves."""
         self.output_latency_value_label.config(text=f"{float(value):.0f} ms")
+
+    def _on_conc_level_change(self, value):
+        """
+        Update the "+X dB" label above the concealer-level fader as it
+        moves, and, if a session is currently running, push the new gain
+        straight into it. Stream._process_chunk re-reads
+        stream_config["conc_multiplier"] fresh on every single audio
+        chunk (see stream.py), so mutating that dict entry here takes
+        effect on the very next chunk - unlike every other setting, which
+        is only ever a snapshot taken once, when Start is pressed.
+        """
+        db = float(value)
+        self.conc_level_value_label.config(text=f"{db:+.0f} dB")
+        if self.concealer_stream is not None:
+            self.concealer_stream.stream_config["conc_multiplier"] = 10.0 ** (db / 20.0)
 
     # ── Level meters ──────────────────────────────────────────────────────
 
@@ -727,6 +796,7 @@ class ConcealerGUI:
         stream_config["device_in"] = device_in
         stream_config["device_out"] = device_out
         stream_config["output_latency"] = output_latency_ms / 1000.0
+        stream_config["conc_multiplier"] = 10.0 ** (self.conc_level_var.get() / 20.0)
         save_yaml(stream_path, stream_config)
 
         concealer_path = _writable_config_path("concealer", "default.yaml")
@@ -974,6 +1044,10 @@ class ConcealerGUI:
         self.denoiser_combo.config(state=combo_state)
         self.ping_btn.config(state="normal" if enabled else "disabled")
         self.output_latency_scale.config(state=scale_state)
+        # Concealer level is deliberately NOT locked here - see
+        # _on_conc_level_change, which pushes changes straight into a
+        # running session's Stream, unlike every other setting above (which
+        # really is just a snapshot taken once, at Start).
         self.save_check.config(state="normal" if enabled else "disabled")
         self.output_dir_entry.config(state="normal" if enabled else "disabled")
 
