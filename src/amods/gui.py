@@ -295,7 +295,7 @@ class ConcealerGUI:
         self.concealing_rate_scale = tk.Scale(
             vad_frame, from_=0.1, to=0.9, resolution=0.1, orient="horizontal",
             variable=self.concealing_rate_var, showvalue=False, length=230,
-            command=lambda v: self.concealing_rate_value_label.config(text=v),
+            command=self._on_concealing_rate_change,
         )
         self.concealing_rate_scale.grid(row=1, column=1, **pad)
 
@@ -309,7 +309,7 @@ class ConcealerGUI:
         self.concealer_memory_rate_scale = tk.Scale(
             vad_frame, from_=0.1, to=0.9, resolution=0.1, orient="horizontal",
             variable=self.concealer_memory_rate_var, showvalue=False, length=230,
-            command=lambda v: self.concealer_memory_rate_value_label.config(text=v),
+            command=self._on_concealer_memory_rate_change,
         )
         self.concealer_memory_rate_scale.grid(row=2, column=1, **pad)
 
@@ -787,6 +787,35 @@ class ConcealerGUI:
                 rate_var.set(default_rate)
                 value_label.config(text=str(default_rate))
 
+    def _on_concealing_rate_change(self, value):
+        """Update the value label, and, if a session is running, push the new rate straight into the live source VAD."""
+        self.concealing_rate_value_label.config(text=value)
+        if self.concealer_stream is not None:
+            self._apply_live_vad_param(self.concealer_stream.source_vad, value)
+
+    def _on_concealer_memory_rate_change(self, value):
+        """Update the value label, and, if a session is running, push the new rate straight into the live concealer VAD."""
+        self.concealer_memory_rate_value_label.config(text=value)
+        if self.concealer_stream is not None:
+            self._apply_live_vad_param(self.concealer_stream.concealer.vad, value)
+
+    def _apply_live_vad_param(self, vad_instance, value):
+        """
+        Push a rate/aggressiveness slider's new value into an already-
+        running VAD instance so it takes effect on that VAD's very next
+        predict() call - every backend (webrtc/silero/ten) reads
+        self.logit_threshold fresh each call (see amods.models.vad), so
+        just mutating that attribute is enough for ten/silero. webrtc's
+        aggressiveness, unlike logit_threshold, is baked into its C model
+        object at construction time, so that one is rebuilt instead.
+        """
+        vad_type = self.vad_type_var.get()
+        if vad_type == "webrtc":
+            import webrtcvad
+            vad_instance.model = webrtcvad.Vad(int(float(value)))
+        else:
+            vad_instance.logit_threshold = round(1.0 - float(value), 1)
+
     # ── Config writing ────────────────────────────────────────────────────
 
     def _write_configs(self, device_in, device_out, output_latency_ms):
@@ -1039,15 +1068,15 @@ class ConcealerGUI:
         self.in_combo.config(state=combo_state)
         self.out_combo.config(state=combo_state)
         self.vad_type_combo.config(state=combo_state)
-        self.concealing_rate_scale.config(state=scale_state)
-        self.concealer_memory_rate_scale.config(state=scale_state)
+        # Concealing rate, concealer memory rate, and concealer level are
+        # deliberately NOT locked here - see _on_concealing_rate_change,
+        # _on_concealer_memory_rate_change, and _on_conc_level_change,
+        # which each push changes straight into a running session's Stream,
+        # unlike every other setting above (which really is just a
+        # snapshot taken once, at Start, and needs Stop/Start to change).
         self.denoiser_combo.config(state=combo_state)
         self.ping_btn.config(state="normal" if enabled else "disabled")
         self.output_latency_scale.config(state=scale_state)
-        # Concealer level is deliberately NOT locked here - see
-        # _on_conc_level_change, which pushes changes straight into a
-        # running session's Stream, unlike every other setting above (which
-        # really is just a snapshot taken once, at Start).
         self.save_check.config(state="normal" if enabled else "disabled")
         self.output_dir_entry.config(state="normal" if enabled else "disabled")
 
