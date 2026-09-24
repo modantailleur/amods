@@ -328,6 +328,25 @@ conducted at LS2N, LORIA, and IRCAM.
 
 ## Changelog
 
+### 0.1.10
+
+- Fixed `setuptools>=82` breaking `webrtcvad` on install 
+- Fixed the GUI window sometimes freezing 
+- Fixed the concealer clicking/pumping audibly at high gain
+- Fixed streaming mode re-feeding the concealer's memory continuously on
+  an almost-unchanged rolling window instead of waiting for genuinely
+  new speech, which flooded memory with near-duplicate clips and made it
+  more likely for concealing clips picked close together to end up at
+  mismatched volumes.
+- Each recorded concealer clip's fade-in/fade-out is now a raised-cosine
+  (half-Hann) curve instead of linear
+- Added a dB-scaled "Concealer level" fader 
+- Added an "Output latency" slider 
+- The VAD threshold slider is now two independent, live-adjustable
+  sliders: "Concealing rate" (the real-time source VAD, when concealing
+  actually starts) and "Concealer memory rate" (the concealer's own VAD
+  in its background clip-collection branch).
+
 ### 0.1.9
 
 - Fixed the GUI freezing when pressing Start, if the selected device blocks
