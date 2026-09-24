@@ -45,6 +45,42 @@ PING_DURATION_S = 0.7
 PING_FADE_S = 0.05
 PING_AMPLITUDE = 0.4
 
+# Output-latency slider: tunable so a user can raise it until Ping stops
+# lagging on a device whose default is too aggressive.
+OUTPUT_LATENCY_MIN_MS = 0
+OUTPUT_LATENCY_MAX_MS = 200
+OUTPUT_LATENCY_STEP_MS = 5
+OUTPUT_LATENCY_DEFAULT_MS = 80
+
+
+class _Tooltip:
+    """Minimal hover tooltip: shows `text` in a small borderless window near `widget` while the mouse is over it."""
+
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self._tipwindow = None
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, _event=None):
+        if self._tipwindow is not None:
+            return
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self._tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            tw, text=self.text, justify="left", background="#ffffe0",
+            relief="solid", borderwidth=1, font=("", 9), wraplength=220,
+        ).pack(ipadx=4, ipady=2)
+
+    def _hide(self, _event=None):
+        if self._tipwindow is not None:
+            self._tipwindow.destroy()
+            self._tipwindow = None
+
 
 def _writable_config_path(component, name):
     """
@@ -155,6 +191,36 @@ class ConcealerGUI:
             maximum=100, variable=self.in_level_var, style="Level.Horizontal.TProgressbar",
         ).grid(row=0, column=2, padx=(0, 10), pady=6)
 
+        # ── Output latency (tunable via Ping - see the info tooltip) ───────
+        latency_box = ttk.Frame(devices_frame)
+        latency_box.grid(row=0, column=3, padx=(0, 10), pady=6, sticky="ew")
+
+        latency_header = ttk.Frame(latency_box)
+        latency_header.pack(fill="x")
+        ttk.Label(latency_header, text="Latency", font=("", 8)).pack(side="left")
+        # Drawn by hand instead of using a Unicode "info" glyph (e.g. ⓘ)
+        # - not every system font includes one, and a missing glyph renders
+        # as a dotted placeholder box instead. A small filled circle + plain
+        # "i" can't have that problem. The canvas background is matched to
+        # the surrounding ttk frame so only the circular badge is visible,
+        # not a mismatched square behind it.
+        bg_color = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
+        info_icon = tk.Canvas(latency_header, width=16, height=16, highlightthickness=0, bg=bg_color)
+        info_icon.pack(side="left", padx=(2, 0))
+        info_icon.create_oval(0, 0, 13, 13, fill="#2f6fed", outline="")
+        info_icon.create_text(8, 8, text="i", font=("", 7), fill="white")
+        _Tooltip(info_icon, "Set the latency to a level where the ping doesn't lag.")
+        self.output_latency_value_label = ttk.Label(latency_header, text="", font=("", 8))
+        self.output_latency_value_label.pack(side="right")
+
+        self.output_latency_var = tk.DoubleVar()
+        self.output_latency_scale = tk.Scale(
+            latency_box, from_=OUTPUT_LATENCY_MIN_MS, to=OUTPUT_LATENCY_MAX_MS,
+            resolution=OUTPUT_LATENCY_STEP_MS, orient="horizontal", showvalue=False,
+            length=100, variable=self.output_latency_var, command=self._on_output_latency_change,
+        )
+        self.output_latency_scale.pack(fill="x")
+
         ttk.Label(devices_frame, text="Speaker (out)").grid(row=1, column=0, sticky="w", **pad)
         self.out_var = tk.StringVar()
         self.out_combo = ttk.Combobox(
@@ -164,7 +230,8 @@ class ConcealerGUI:
         self.out_combo.grid(row=1, column=1, **pad)
         self._preselect(self.out_combo, self.out_devices, default_out)
         self._avoid_same_device_default()
-        self.out_combo.bind("<<ComboboxSelected>>", lambda e: self._update_warnings())
+        self._reset_output_latency_default()
+        self.out_combo.bind("<<ComboboxSelected>>", lambda e: self._on_output_device_change())
 
         self.out_level_var = tk.DoubleVar(value=0)
         ttk.Progressbar(
@@ -385,6 +452,21 @@ class ConcealerGUI:
         device_in = self._selected_index(self.in_combo, self.in_devices)
         threading.Thread(target=self._restart_input_monitor, args=(device_in,), daemon=True).start()
 
+    def _on_output_device_change(self):
+        """React to the speaker combo changing: refresh warnings (the latency slider's default doesn't depend on the device)."""
+        self._update_warnings()
+
+    # ── Output latency ──────────────────────────────────────────────────────
+
+    def _reset_output_latency_default(self):
+        """Reset the latency slider to its fixed default (not device-dependent - see OUTPUT_LATENCY_DEFAULT_MS)."""
+        self.output_latency_var.set(OUTPUT_LATENCY_DEFAULT_MS)
+        self._on_output_latency_change(OUTPUT_LATENCY_DEFAULT_MS)
+
+    def _on_output_latency_change(self, value):
+        """Update the little "XX ms" label next to the latency slider as it moves."""
+        self.output_latency_value_label.config(text=f"{float(value):.0f} ms")
+
     # ── Level meters ──────────────────────────────────────────────────────
 
     def _push_level(self, which, var, block):
@@ -471,15 +553,18 @@ class ConcealerGUI:
             return
 
         # Captured now, on the Tk main thread, so the background work below
-        # never needs to touch the combo box itself to know which mic to
-        # release/reopen.
+        # never needs to touch the combo box (or the latency slider) itself
+        # to know which mic to release/reopen, or what latency to request.
         device_in = self._selected_index(self.in_combo, self.in_devices)
+        output_latency_ms = self.output_latency_var.get()
 
         self._ping_busy = True
         self.ping_btn.config(state="disabled")
-        threading.Thread(target=self._ping_worker, args=(device_out, device_in), daemon=True).start()
+        threading.Thread(
+            target=self._ping_worker, args=(device_out, device_in, output_latency_ms), daemon=True
+        ).start()
 
-    def _ping_worker(self, device_out, device_in):
+    def _ping_worker(self, device_out, device_in, output_latency_ms):
         """
         Runs entirely on its own background thread, never the Tk main
         thread: opening (or closing) an audio stream can block indefinitely
@@ -497,14 +582,14 @@ class ConcealerGUI:
         # tone.
         self._stop_input_monitor()
         try:
-            stream = self._build_ping_stream(device_out, device_in)
+            stream = self._build_ping_stream(device_out, device_in, output_latency_ms)
             stream.start()
         except Exception as e:
             self.root.after(0, self._on_ping_start_failed, str(e), device_in)
             return
         self.root.after(0, self._on_ping_started, stream)
 
-    def _build_ping_stream(self, device_out, device_in):
+    def _build_ping_stream(self, device_out, device_in, output_latency_ms):
         """Construct (but don't start) the fade-in/fade-out test-tone OutputStream; runs on the ping worker thread."""
         sr = int(sd.query_devices(device_out)["default_samplerate"])
         n_samples = int(sr * PING_DURATION_S)
@@ -542,6 +627,7 @@ class ConcealerGUI:
         stream = sd.OutputStream(
             samplerate=sr, channels=1, device=device_out,
             callback=callback, finished_callback=on_finished,
+            latency=output_latency_ms / 1000.0,
         )
         return stream
 
@@ -591,12 +677,13 @@ class ConcealerGUI:
 
     # ── Config writing ────────────────────────────────────────────────────
 
-    def _write_configs(self, device_in, device_out):
-        """Persist the currently selected devices, VAD type/threshold, and denoiser choice to the stream/concealer/vad configs."""
+    def _write_configs(self, device_in, device_out, output_latency_ms):
+        """Persist the currently selected devices, output latency, VAD type/threshold, and denoiser choice to the stream/concealer/vad configs."""
         stream_path = _writable_config_path("stream", "default.yaml")
         stream_config = load_yaml(stream_path) or load_config("stream", "default")
         stream_config["device_in"] = device_in
         stream_config["device_out"] = device_out
+        stream_config["output_latency"] = output_latency_ms / 1000.0
         save_yaml(stream_path, stream_config)
 
         concealer_path = _writable_config_path("concealer", "default.yaml")
@@ -645,7 +732,7 @@ class ConcealerGUI:
             )
 
         try:
-            self._write_configs(device_in, device_out)
+            self._write_configs(device_in, device_out, self.output_latency_var.get())
             if self.save_recording_var.get():
                 record_mode = "disk"
                 record_outdir = self.output_dir_var.get().strip() or DEFAULT_OUTPUT_DIR
@@ -838,6 +925,7 @@ class ConcealerGUI:
         self.vad_param_scale.config(state=scale_state)
         self.denoiser_combo.config(state=combo_state)
         self.ping_btn.config(state="normal" if enabled else "disabled")
+        self.output_latency_scale.config(state=scale_state)
         self.save_check.config(state="normal" if enabled else "disabled")
         self.output_dir_entry.config(state="normal" if enabled else "disabled")
 
