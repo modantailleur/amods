@@ -72,6 +72,73 @@ h1 {
   text-align: right;
 }
 
+/* Mic/speaker rows: label, fixed-width dropdown, level meter, (optional)
+   button - all in one row that never reflows based on device-name length.
+   A shared fixed pixel width for column 2 (not 1fr) is what keeps the mic
+   and speaker dropdowns exactly the same width as each other, even though
+   only the speaker row also has a Ping button in column 4. Mirrors
+   amods.gui's fixed-width ttk.Combobox(width=42) - device names never
+   resize the control, they just get clipped with an ellipsis. */
+.device-row {
+  display: grid;
+  grid-template-columns: 100px 165px 60px auto;
+  align-items: center;
+  gap: 8px;
+  margin-block: 8px;
+}
+
+.device-row label {
+  font-size: 0.9rem;
+}
+
+.device-row select {
+  width: 100%;
+}
+
+/* Two panels side by side, matching amods.gui's vad_frame/level_frame
+   sharing one grid row (see gui.py) - Concealer level only needs to be as
+   wide as its vertical fader, so it gets a fixed narrow column and
+   Concealer controls takes the rest. */
+.panel-row {
+  display: flex;
+  gap: 14px;
+  margin-block: 14px;
+  align-items: stretch;
+}
+
+.panel-row .panel {
+  margin-block: 0;
+}
+
+.concealer-controls-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.concealer-level-panel {
+  flex: 0 0 130px;
+  display: flex;
+  flex-direction: column;
+}
+
+.concealer-level-panel .fader-row {
+  flex: 1;
+  justify-content: center;
+}
+
+/* Inside the narrowed Concealer controls panel, the label goes on its own
+   line above the slider (rather than competing for horizontal space with
+   it) so "Concealer memory rate" never forces the panel wider. */
+.concealer-controls-panel .row {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.concealer-controls-panel .row label {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
 .hint {
   font-size: 0.75rem;
   color: #6b7280;
@@ -136,8 +203,98 @@ input.vertical-fader {
 }
 
 select {
-  flex: 1;
+  width: 220px;
+  max-width: 100%;
+  min-width: 0;
   padding: 6px;
   border-radius: 6px;
   border: 1px solid #cbd0d8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.level-bar {
+  width: 60px;
+  height: 10px;
+  background: #e3e6ea;
+  border: 1px solid #c7cdd6;
+  border-radius: 5px;
+  overflow: hidden;
+  flex: none;
+}
+
+.level-fill {
+  height: 100%;
+  width: 0%;
+  background: #2f6fed;
+  transition: width 60ms linear;
+}
+
+#ping-btn {
+  padding: 5px 12px;
+  border: 1px solid #2f6fed;
+  border-radius: 6px;
+  background: transparent;
+  color: #2f6fed;
+  cursor: pointer;
+  font-size: 0.85rem;
+  flex: none;
+}
+
+#ping-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.latency-row {
+  gap: 8px;
+}
+
+.latency-label {
+  min-width: 100px;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.info-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #2f6fed;
+  color: white;
+  font-size: 0.7rem;
+  font-style: italic;
+  font-weight: bold;
+  cursor: default;
+}
+
+.info-icon .tooltip {
+  display: none;
+  position: absolute;
+  bottom: 130%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #ffffe0;
+  color: #1a1a1a;
+  border: 1px solid #cbd0d8;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.75rem;
+  font-weight: normal;
+  font-style: normal;
+  width: 200px;
+  white-space: normal;
+  z-index: 10;
+}
+
+.info-icon:hover .tooltip,
+.info-icon:focus .tooltip {
+  display: block;
 }

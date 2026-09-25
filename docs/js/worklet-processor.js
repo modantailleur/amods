@@ -11,6 +11,23 @@
 // (see stream.py), just relayed through the main thread once instead of
 // talking to the worker directly (an AudioWorkletProcessor's port can only
 // reach its owning AudioWorkletNode on the main thread).
+// Matches amods.gui's LEVEL_METER_DB_RANGE / LEVEL_METER_MIN_UPDATE_INTERVAL
+// exactly: RMS-in-dBFS mapped onto this range gives a 0-100 bar value,
+// chosen so normal speech (roughly -25 to -15 dBFS) sits in the upper half
+// of the bar; updates throttled so the meter doesn't redraw far more often
+// than it's actually useful to look at.
+const LEVEL_METER_DB_MIN = -55.0;
+const LEVEL_METER_DB_MAX = -5.0;
+const LEVEL_METER_MIN_UPDATE_INTERVAL_S = 0.05;
+
+function levelFromSumSq(sumSq, count) {
+  if (count === 0) return 0;
+  const rms = Math.sqrt(sumSq / count);
+  const db = 20 * Math.log10(rms + 1e-9);
+  const level = ((db - LEVEL_METER_DB_MIN) / (LEVEL_METER_DB_MAX - LEVEL_METER_DB_MIN)) * 100;
+  return Math.max(0, Math.min(100, level));
+}
+
 class ConcealerWorkletProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -25,6 +42,12 @@ class ConcealerWorkletProcessor extends AudioWorkletProcessor {
     this.outWrite = 0;
     this.outRead = 0;
     this.outAvailable = 0;
+
+    this._inSumSq = 0;
+    this._inCount = 0;
+    this._outSumSq = 0;
+    this._outCount = 0;
+    this._lastLevelReport = 0;
 
     this.running = true;
 
@@ -54,6 +77,8 @@ class ConcealerWorkletProcessor extends AudioWorkletProcessor {
     if (inCh) {
       for (let i = 0; i < inCh.length; i++) {
         this.inputBuf[this.inputPos++] = inCh[i];
+        this._inSumSq += inCh[i] * inCh[i];
+        this._inCount++;
         if (this.inputPos === this.chunkSize) {
           // Transfer ownership of a fresh copy (postMessage with a
           // Transferable ArrayBuffer - zero-copy) so the worklet's own
@@ -73,6 +98,21 @@ class ConcealerWorkletProcessor extends AudioWorkletProcessor {
       } else {
         outCh[i] = 0; // underrun: processing hasn't kept up yet - silence rather than stale/garbage audio
       }
+      this._outSumSq += outCh[i] * outCh[i];
+      this._outCount++;
+    }
+
+    if (currentTime - this._lastLevelReport >= LEVEL_METER_MIN_UPDATE_INTERVAL_S) {
+      this._lastLevelReport = currentTime;
+      this.port.postMessage({
+        type: 'levels',
+        in: levelFromSumSq(this._inSumSq, this._inCount),
+        out: levelFromSumSq(this._outSumSq, this._outCount),
+      });
+      this._inSumSq = 0;
+      this._inCount = 0;
+      this._outSumSq = 0;
+      this._outCount = 0;
     }
 
     return true;
