@@ -12,7 +12,7 @@ const els = {
   concealerMemoryRateValue: document.getElementById('concealer-memory-rate-value'),
   concLevel: document.getElementById('conc-level'),
   concLevelValue: document.getElementById('conc-level-value'),
-  denoiseCheckbox: document.getElementById('denoise-checkbox'),
+  denoiserSelect: document.getElementById('denoiser-select'),
   status: document.getElementById('status'),
   progress: document.getElementById('progress'),
   latency: document.getElementById('latency'),
@@ -115,7 +115,7 @@ async function start() {
     type: 'init',
     config: {
       sr,
-      denoise: els.denoiseCheckbox.checked,
+      denoiserModel: els.denoiserSelect.value,
       concealingThreshold: rateToThreshold(els.concealingRate.value),
       concealerMemoryThreshold: rateToThreshold(els.concealerMemoryRate.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
@@ -177,7 +177,7 @@ function stop() {
 function setControlsEnabled(enabled) {
   els.micSelect.disabled = !enabled;
   els.speakerSelect.disabled = !enabled;
-  els.denoiseCheckbox.disabled = !enabled;
+  els.denoiserSelect.disabled = !enabled;
   // Concealing rate, concealer memory rate, and concealer level stay
   // enabled while running - they're live-adjustable (see the worker
   // message handlers below), same as the Python GUI.

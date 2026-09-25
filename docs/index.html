@@ -37,10 +37,14 @@
       <span id="concealer-memory-rate-value" class="value">0.5</span>
     </div>
     <div class="row">
-      <label for="denoise-checkbox">Denoise</label>
-      <input type="checkbox" id="denoise-checkbox" checked />
-      <span class="hint">(downloads a ~134MB model the first time it runs)</span>
+      <label for="denoiser-select">Denoiser</label>
+      <select id="denoiser-select">
+        <option value="none">None</option>
+        <option value="original" selected>FbDM dns64 — original (~134MB)</option>
+        <option value="int8">FbDM dns64 — quantized (~84MB)</option>
+      </select>
     </div>
+    <p class="hint">The model downloads (and is cached by your browser) the first time you press Start with a denoiser other than "None" selected.</p>
   </section>
 
   <section class="panel">

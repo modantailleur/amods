@@ -20,10 +20,21 @@ let stream = null;
 let concealer = null;
 let sourceVad = null;
 
+// docs/index.html's "Denoiser" dropdown value -> model file. "int8" is
+// dns64 with its LSTM weights dynamically quantized to int8 (see
+// scripts/quantize_dns64.py for why only LSTM, not also Conv): ~84MB vs.
+// the original's ~134MB, verified to load and run correctly in an actual
+// browser (not just Node) at a real, if modest, runtime cost.
+const DENOISER_MODEL_PATHS = {
+  original: '../models/dns64.onnx',
+  int8: '../models/dns64.int8.onnx',
+};
+
 async function init(cfg) {
+  const denoiserPath = DENOISER_MODEL_PATHS[cfg.denoiserModel]; // undefined for "none"
   const [vadSession, dnsSession] = await Promise.all([
     ort.InferenceSession.create('../models/silero_vad.onnx'),
-    cfg.denoise ? ort.InferenceSession.create('../models/dns64.onnx') : Promise.resolve(null),
+    denoiserPath ? ort.InferenceSession.create(denoiserPath) : Promise.resolve(null),
   ]);
 
   sourceVad = new SileroVAD(vadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr });
@@ -43,7 +54,7 @@ async function init(cfg) {
     pending_conc_max_size: 3 * cfg.sr,
     freeze_learning: false,
     decision_win: 0.3,
-    denoise: cfg.denoise,
+    denoise: Boolean(denoiserPath),
   };
   concealer = new GranSpeechMask(cfg.sr, concealerConfig, { denoiser, vad: concealerVad });
 
