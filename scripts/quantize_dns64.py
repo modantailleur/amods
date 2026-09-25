@@ -1,13 +1,13 @@
 """
-Shrink docs/models/dns64.onnx into docs/models/dns64.int8.onnx, the
-"quantized" option in the web GUI's denoiser dropdown (docs/index.html).
+Step 1 of 2 in reproducing docs/models/dns64.int8.onnx (the "quantized"
+option in the web GUI's denoiser dropdown, docs/index.html) from
+docs/models/dns64.onnx. Run scripts/float16_denoiser_conv.py on this
+script's own output next - see that script for step 2.
 
-Only the model's LSTM weights (50% of its total weight bytes - verified by
-summing each op type's initializer tensor sizes) are dynamically quantized
-to int8; Conv/ConvTranspose (the other 50%) are deliberately left alone.
-This is NOT the smallest theoretically possible result - quantizing Conv
-too would shrink the file further (~50MB instead of ~84MB) - but it is the
-largest reduction that actually WORKS in a browser:
+This step dynamically quantizes only the model's LSTM weights (50% of its
+total weight bytes - verified by summing each op type's initializer tensor
+sizes) to int8; Conv/ConvTranspose (the other 50%, handled by step 2
+instead) are deliberately left alone here:
 
   - onnxruntime's dynamic quantization implements a quantized Conv via a
     ConvInteger node, which has NO implementation in onnxruntime-web's WASM
@@ -21,19 +21,19 @@ largest reduction that actually WORKS in a browser:
   - The quantized LSTM op (DynamicQuantizeLSTM) IS implemented in the WASM
     backend - confirmed the same way, in real headless Chrome, including
     running real inference on it (not just loading the session).
-  - Combining this with a float16 conversion of the remaining Conv/
-    ConvTranspose weights (for further size reduction) was also attempted,
-    but onnxconverter_common's float16 conversion took 10+ minutes without
-    finishing on this model (twice) - impractical, abandoned rather than
-    left half-done. If revisited, that's the next thing to try.
 
-Verified (see this session's history): the resulting file loads and runs
-correctly in real headless Chrome via onnxruntime-web, producing
-non-NaN output of the expected shape.
+This script's own output (~84MB) is an intermediate file, not what's
+shipped - see scripts/float16_denoiser_conv.py for how the remaining
+Conv/ConvTranspose weights get shrunk further (float16, not int8 - Conv
+can't go to int8 in a WASM-compatible way, per above) down to the shipped
+~50MB docs/models/dns64.int8.onnx.
+
+Verified: the resulting file loads and runs correctly in real headless
+Chrome via onnxruntime-web, producing non-NaN output of the expected shape.
 
 Usage:
     python scripts/quantize_dns64.py
-Reads docs/models/dns64.onnx, writes docs/models/dns64.int8.onnx.
+Reads docs/models/dns64.onnx, writes docs/models/dns64.int8.lstmonly.onnx.
 
 Requires: pip install onnx onnxruntime
 """
@@ -43,7 +43,7 @@ from onnxruntime.quantization import QuantType, quantize_dynamic
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "..", "docs", "models", "dns64.onnx")
-DST = os.path.join(HERE, "..", "docs", "models", "dns64.int8.onnx")
+DST = os.path.join(HERE, "..", "docs", "models", "dns64.int8.lstmonly.onnx")
 
 
 def main():
