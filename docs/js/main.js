@@ -39,6 +39,7 @@ const els = {
   concLevel: document.getElementById('conc-level'),
   concLevelValue: document.getElementById('conc-level-value'),
   denoiserSelect: document.getElementById('denoiser-select'),
+  loadingMessage: document.getElementById('loading-message'),
   status: document.getElementById('status'),
   progress: document.getElementById('progress'),
   latency: document.getElementById('latency'),
@@ -259,6 +260,36 @@ async function populateDevices() {
   }
   updateWarnings();
   startInputPreview();
+}
+
+// ── Model preload ─────────────────────────────────────────────────────────
+// Fetches every model file on page load purely to warm the browser's HTTP
+// cache, so that when the user presses Start, worker-engine.js's and
+// denoiser-worker.js's own ort.InferenceSession.create() calls (which fetch
+// these same URLs) resolve from cache instead of hitting the network -
+// that's what was making the first Start after opening the page slow,
+// especially for the ~84MB denoiser. The Start button stays disabled (see
+// its `disabled` attribute in index.html) until this finishes.
+const MODEL_URLS = ['./models/silero_vad.onnx', './models/dns64.int8.onnx'];
+
+async function preloadModels() {
+  try {
+    await Promise.all(
+      MODEL_URLS.map(async (url) => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText} (${url})`);
+        // fetch()'s promise resolves once response headers arrive, not once
+        // the body finishes downloading - reading it out is what actually
+        // waits for (and caches) the full file.
+        await response.arrayBuffer();
+      })
+    );
+    els.loadingMessage.hidden = true;
+  } catch (e) {
+    els.loadingMessage.textContent = `Could not preload models: ${e.message}. You can still press Start to load them then.`;
+  } finally {
+    els.startStopBtn.disabled = false;
+  }
 }
 
 // ── Start / Stop ────────────────────────────────────────────────────────
@@ -501,3 +532,4 @@ els.concLevel.addEventListener('input', () => {
 populateDevices().catch((e) => {
   els.status.textContent = `Could not list audio devices: ${e.message}`;
 });
+preloadModels();

@@ -153,6 +153,10 @@ input.vertical-fader {
   accent-color: #2f6fed;
 }
 
+#loading-message {
+  margin-bottom: 8px;
+}
+
 #start-stop-btn {
   display: block;
   width: 100%;
