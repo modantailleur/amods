@@ -132,11 +132,6 @@ h1 {
   min-width: 0;
 }
 
-.hint {
-  font-size: 0.75rem;
-  color: #6b7280;
-}
-
 .warning {
   color: #cc5500;
   font-size: 0.8rem;
