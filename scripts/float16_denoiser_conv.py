@@ -1,6 +1,9 @@
 """
-Step 2 of 2 in reproducing docs/models/dns64.int8.onnx - run
-scripts/quantize_dns64.py first (step 1), then this script on its output.
+Step 2 of 2 in an EARLIER, now-superseded pipeline - kept for reference/
+history, not what's currently shipped (see scripts/quantize_dns64_max.py
+for that, and quantize_dns64.py's docstring for why this pipeline was
+superseded). Run scripts/quantize_dns64.py first (step 1), then this script
+on its output.
 
 Shrinks the model further by converting its remaining Conv/ConvTranspose
 weights (float32, ~67MB - everything step 1's LSTM-only int8 quantization
@@ -42,18 +45,22 @@ the graph ever sees a float16 tensor, so there is no boundary-placement
 problem left to solve and no shape/type inference is needed at all - this
 script never even loads onnx.shape_inference.
 
-Verified: loads and runs correctly in both onnxruntime (Python, this
-script's own verification step below) and separately in real headless
-Chrome via onnxruntime-web (922ms inference, no NaN/Inf, correct shape).
-Output quality vs. step 1's int8-only model: 0.99995 cosine similarity on a
-random test input - the float16 rounding is not perceptible.
+Verified (at the time this was the shipped pipeline): loads and runs
+correctly in both onnxruntime (Python, this script's own verification step
+below) and separately in real headless Chrome via onnxruntime-web (922ms
+inference, no NaN/Inf, correct shape). Output quality vs. step 1's int8-only
+model: 0.99995 cosine similarity on a random test input - the float16
+rounding is not perceptible (contrast with quantize_dns64_max.py's int8
+Conv quantization, which is NOT similarly lossless).
 
 Usage:
     python scripts/quantize_dns64.py            # step 1
     python scripts/float16_denoiser_conv.py     # step 2 (this file)
 Reads docs/models/dns64.int8.lstmonly.onnx (step 1's output), writes
-docs/models/dns64.int8.onnx - the file docs/index.html's denoiser dropdown
-actually ships.
+docs/models/dns64.int8.float16conv.onnx - deliberately NOT
+docs/models/dns64.int8.onnx (the actually-shipped name, produced by
+quantize_dns64_max.py instead), so re-running this old pipeline can never
+accidentally clobber the current shipped model.
 
 Requires: pip install onnx onnxruntime numpy
 """
@@ -66,7 +73,7 @@ from onnx import TensorProto, numpy_helper
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "..", "docs", "models", "dns64.int8.lstmonly.onnx")
-DST = os.path.join(HERE, "..", "docs", "models", "dns64.int8.onnx")
+DST = os.path.join(HERE, "..", "docs", "models", "dns64.int8.float16conv.onnx")
 
 MODEL_LEN = 32085  # fixed input/output length for this graph - see denoiser-dns64.js
 TARGET_OPS = {"Conv", "ConvTranspose"}

@@ -1,8 +1,13 @@
 """
-Step 1 of 2 in reproducing docs/models/dns64.int8.onnx (the "quantized"
-option in the web GUI's denoiser dropdown, docs/index.html) from
-docs/models/dns64.onnx. Run scripts/float16_denoiser_conv.py on this
-script's own output next - see that script for step 2.
+Step 1 of 2 in an EARLIER, now-superseded pipeline for shrinking
+docs/models/dns64.onnx - kept for reference/history, not what's currently
+shipped. See scripts/quantize_dns64_max.py for what docs/index.html's
+denoiser dropdown actually ships today (also int8 for Conv/ConvTranspose,
+not just float16, for a smaller file - this pipeline's own LSTM-only int8
+quantization step is still relevant background for why that script's Conv
+step exists, so it's kept rather than deleted). If reproducing this older
+pipeline anyway: run scripts/float16_denoiser_conv.py on this script's own
+output next - see that script for step 2.
 
 This step dynamically quantizes only the model's LSTM weights (50% of its
 total weight bytes - verified by summing each op type's initializer tensor
@@ -22,11 +27,14 @@ instead) are deliberately left alone here:
     backend - confirmed the same way, in real headless Chrome, including
     running real inference on it (not just loading the session).
 
-This script's own output (~84MB) is an intermediate file, not what's
-shipped - see scripts/float16_denoiser_conv.py for how the remaining
-Conv/ConvTranspose weights get shrunk further (float16, not int8 - Conv
-can't go to int8 in a WASM-compatible way, per above) down to the shipped
-~50MB docs/models/dns64.int8.onnx.
+This script's own output (~84MB) is an intermediate file. In this old
+pipeline, scripts/float16_denoiser_conv.py shrinks the remaining
+Conv/ConvTranspose weights further via float16 (not int8 - dynamic
+quantization can't get Conv to int8 in a WASM-compatible way, per above)
+down to ~50MB. scripts/quantize_dns64_max.py takes a different, better
+approach for that step now (static QDQ int8 quantization instead of
+dynamic - a different quantization format sidesteps the ConvInteger
+problem), reaching ~34MB - see that script for what's actually shipped.
 
 Verified: the resulting file loads and runs correctly in real headless
 Chrome via onnxruntime-web, producing non-NaN output of the expected shape.

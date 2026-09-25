@@ -270,7 +270,7 @@ async function populateDevices() {
 // denoiser-worker.js's own ort.InferenceSession.create() calls (which fetch
 // these same URLs) resolve from cache instead of hitting the network -
 // that's what was making the first Start after opening the page slow,
-// especially for the ~50MB denoiser. The Start button stays disabled (see
+// especially for the ~34MB denoiser. The Start button stays disabled (see
 // its `disabled` attribute in index.html) until this finishes.
 const MODEL_URLS = ['./models/silero_vad.onnx', './models/dns64.int8.onnx'];
 
