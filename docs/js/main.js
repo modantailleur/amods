@@ -443,19 +443,23 @@ function updateStatus(status, timing) {
   const outLatencyS = audioContext ? (audioContext.outputLatency ?? audioContext.baseLatency ?? 0) : 0;
   const outMs = outLatencyS * 1000;
 
-  // Input latency: the Web Audio API has no equivalent of PortAudio's
-  // input_stream.latency; MediaStreamTrack.getSettings().latency exists in
-  // some browsers for some devices, but isn't guaranteed - shown as "n/a"
-  // rather than a misleading 0 when unavailable.
+  // Input latency: the Web Audio API has no direct equivalent of
+  // PortAudio's input_stream.latency, but the mic->worker handoff has a
+  // real, always-known contribution of its own - the worklet only forwards
+  // a chunk once CHUNK_SIZE_AT_48K samples have accumulated. On top of
+  // that, MediaStreamTrack.getSettings().latency reports the browser/OS's
+  // own hardware capture latency where available (reliability varies a lot
+  // by platform - e.g. often unpopulated for real devices on Linux), so
+  // it's added in only when present rather than assumed to be 0.
+  const bufferMs = audioContext ? (CHUNK_SIZE_AT_48K / audioContext.sampleRate) * 1000 : 0;
   const track = micStream ? micStream.getAudioTracks()[0] : null;
   const settings = track && track.getSettings ? track.getSettings() : {};
-  const inMsKnown = typeof settings.latency === 'number';
-  const inMs = inMsKnown ? settings.latency * 1000 : 0;
+  const hwLatencyMs = typeof settings.latency === 'number' ? settings.latency * 1000 : 0;
+  const inMs = bufferMs + hwLatencyMs;
 
-  const totalMs = (inMsKnown ? inMs : 0) + outMs + timing.avgMs;
-  const inText = inMsKnown ? `${inMs.toFixed(0)} ms` : 'n/a';
+  const totalMs = inMs + outMs + timing.avgMs;
   els.latency.textContent =
-    `~${totalMs.toFixed(0)} ms  (in ${inText} + out ${outMs.toFixed(0)} ms + algo ` +
+    `~${totalMs.toFixed(0)} ms  (in ${inMs.toFixed(0)} ms + out ${outMs.toFixed(0)} ms + algo ` +
     `${timing.avgMs.toFixed(1)}/${timing.maxMs.toFixed(1)} ms avg/max)`;
 }
 
