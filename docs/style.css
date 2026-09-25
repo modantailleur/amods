@@ -239,3 +239,21 @@ select {
   cursor: default;
 }
 
+/* On phone-width viewports, the mic/speaker rows' fixed columns (sized for
+   a ~480px+ desktop window) plus the Ping button no longer fit on one line
+   without overflowing the panel. Drop Ping to its own line below instead of
+   trying to squeeze it in - `grid-column: 1 / -1` after the row's other
+   three items already fill row 1 makes the grid auto-place it into a new
+   implicit row spanning the full width. */
+@media (max-width: 480px) {
+  .device-row {
+    grid-template-columns: 90px 1fr 60px;
+  }
+
+  #ping-btn {
+    grid-column: 1 / -1;
+    justify-self: end;
+    margin-top: 2px;
+  }
+}
+
