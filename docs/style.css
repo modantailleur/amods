@@ -1,0 +1,143 @@
+:root {
+  color-scheme: light dark;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #f7f8fa;
+  color: #1a1a1a;
+  padding-inline: 16px;
+  padding-block: 24px;
+  max-width: 480px;
+  margin-inline: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  body { background: #16171a; color: #e9e9ec; }
+  .panel, .status-panel { background: #202226 !important; border-color: #33353a !important; }
+  select, input[type="range"] { background: #2a2c31; color: inherit; }
+}
+
+h1 {
+  font-size: 1.4rem;
+  text-align: center;
+  margin-bottom: 0;
+}
+
+.subtitle {
+  text-align: center;
+  color: #6b7280;
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #dcdfe4;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-block: 14px;
+}
+
+.panel h2 {
+  font-size: 0.95rem;
+  margin: 0 0 10px 0;
+  color: #2f6fed;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-block: 8px;
+  flex-wrap: wrap;
+}
+
+.row label {
+  min-width: 150px;
+  font-size: 0.9rem;
+}
+
+.row input[type="range"] {
+  flex: 1;
+  min-width: 100px;
+}
+
+.value {
+  font-weight: 600;
+  min-width: 3em;
+  text-align: right;
+}
+
+.hint {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.warning {
+  color: #cc5500;
+  font-size: 0.8rem;
+  margin: 4px 0 0 0;
+}
+
+.fader-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+input.vertical-fader {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 30px;
+  height: 130px;
+  accent-color: #2f6fed;
+}
+
+#start-stop-btn {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  background: #2f6fed;
+  color: white;
+  cursor: pointer;
+}
+
+#start-stop-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status-panel {
+  background: #fff;
+  border: 1px solid #dcdfe4;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-top: 14px;
+  font-size: 0.9rem;
+}
+
+.status-panel .row {
+  justify-content: space-between;
+}
+
+.status-text {
+  color: #6b7280;
+  text-align: center;
+  margin: 8px 0 0 0;
+}
+
+select {
+  flex: 1;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #cbd0d8;
+}

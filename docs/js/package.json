@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "Marks docs/js as ES modules for Node-based testing (browsers determine module type from the <script type=module> tag, not this file, and don't need it)."
+}

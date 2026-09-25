@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AMODS — Granular Speech Masker</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <h1>Granular Speech Masker</h1>
+  <p class="subtitle">Runs entirely in your browser — nothing is uploaded anywhere.</p>
+
+  <section class="panel">
+    <h2>Audio devices</h2>
+    <div class="row">
+      <label for="mic-select">Mic (in)</label>
+      <select id="mic-select"></select>
+    </div>
+    <div class="row">
+      <label for="speaker-select">Speaker (out)</label>
+      <select id="speaker-select"></select>
+    </div>
+    <p id="output-sink-warning" class="warning"></p>
+  </section>
+
+  <section class="panel">
+    <h2>Concealer controls</h2>
+    <div class="row">
+      <label for="concealing-rate">Concealing rate</label>
+      <input type="range" id="concealing-rate" min="0.1" max="0.9" step="0.1" value="0.5" />
+      <span id="concealing-rate-value" class="value">0.5</span>
+    </div>
+    <div class="row">
+      <label for="concealer-memory-rate">Concealer memory rate</label>
+      <input type="range" id="concealer-memory-rate" min="0.1" max="0.9" step="0.1" value="0.5" />
+      <span id="concealer-memory-rate-value" class="value">0.5</span>
+    </div>
+    <div class="row">
+      <label for="denoise-checkbox">Denoise</label>
+      <input type="checkbox" id="denoise-checkbox" checked />
+      <span class="hint">(downloads a ~134MB model the first time it runs)</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Concealer level</h2>
+    <div class="fader-row">
+      <input type="range" id="conc-level" class="vertical-fader" min="-36" max="36" step="1" value="0" orient="vertical" />
+      <span id="conc-level-value" class="value">+0 dB</span>
+    </div>
+  </section>
+
+  <button id="start-stop-btn">Start</button>
+
+  <section class="status-panel">
+    <div class="row"><span>Progress:</span><span id="progress">—</span></div>
+    <div class="row"><span>Latency:</span><span id="latency">—</span></div>
+    <p id="status" class="status-text">Idle — press Start to begin</p>
+  </section>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
