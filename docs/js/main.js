@@ -1,8 +1,13 @@
 // Main-thread glue: mic capture, AudioWorkletNode <-> Worker relay, idle
 // mic-level preview, Ping, and UI wiring. Mirrors amods.gui as closely as
 // the Web Audio API allows - see per-feature notes below for where it
-// can't be identical (input-latency reporting, output-device latency
-// tuning granularity, etc).
+// can't be identical (input-latency reporting, etc). Deliberately has no
+// output-latency control: AudioContext's latencyHint is only a hint browsers
+// are free to ignore or coarsely quantize, and even where honored it only
+// affects the hardware output buffer (tens of ms) - nowhere near this app's
+// actual latency sources (chunk size, VAD windows, concealer clip duration),
+// so it wouldn't give users the PortAudio-style control amods.gui's
+// equivalent slider does.
 import { applyFade } from './audio-utils.js';
 import { DENOISER_MODEL_PATHS } from './denoiser-models.js';
 
@@ -25,8 +30,6 @@ const els = {
   inLevelFill: document.getElementById('in-level-fill'),
   outLevelFill: document.getElementById('out-level-fill'),
   pingBtn: document.getElementById('ping-btn'),
-  outputLatency: document.getElementById('output-latency'),
-  outputLatencyValue: document.getElementById('output-latency-value'),
   feedbackWarning: document.getElementById('feedback-warning'),
   outputSinkWarning: document.getElementById('output-sink-warning'),
   concealingRate: document.getElementById('concealing-rate'),
@@ -50,9 +53,8 @@ let denoiserWorker = null; // separate Worker/thread for denoiser inference - se
 let running = false;
 
 // Idle mic-level preview + Ping share this lightweight context, separate
-// from the real session's (which needs a specific latencyHint - see
-// start()) - mirrors amods.gui's separate "idle input monitor" vs. the
-// real Stream.
+// from the real session's - mirrors amods.gui's separate "idle input
+// monitor" vs. the real Stream.
 let previewContext = null;
 let previewSource = null;
 let previewAnalyser = null;
@@ -267,12 +269,7 @@ async function start() {
   stopInputPreview();
   if (pingActive) return; // Ping's own finally{} will restore state; don't fight it
 
-  // Output latency, requested via AudioContext's latencyHint (the closest
-  // Web Audio equivalent of PortAudio's per-stream `latency=` request) -
-  // only takes effect at construction time, so (like amods.gui) it's a
-  // Start-time snapshot, not live-adjustable.
-  const latencyHintS = parseFloat(els.outputLatency.value) / 1000;
-  audioContext = new AudioContext({ latencyHint: latencyHintS });
+  audioContext = new AudioContext();
   const sr = audioContext.sampleRate;
 
   const micDeviceId = selectedMicId();
@@ -422,9 +419,6 @@ function setControlsEnabled(enabled) {
   els.speakerSelect.disabled = !enabled;
   els.denoiserSelect.disabled = !enabled;
   els.pingBtn.disabled = !enabled;
-  // Output latency can only be applied when the AudioContext is created
-  // (see start()), so - like amods.gui - it's locked while running.
-  els.outputLatency.disabled = !enabled;
   // Concealing rate, concealer memory rate, and concealer level stay
   // enabled while running - they're live-adjustable (see the worker
   // message handlers below), same as the Python GUI.
@@ -481,10 +475,6 @@ els.micSelect.addEventListener('change', () => {
   restartInputPreview();
 });
 els.speakerSelect.addEventListener('change', () => updateWarnings());
-
-els.outputLatency.addEventListener('input', () => {
-  els.outputLatencyValue.textContent = `${els.outputLatency.value} ms`;
-});
 
 els.concealingRate.addEventListener('input', () => {
   const threshold = rateToThreshold(els.concealingRate.value);
