@@ -40,6 +40,8 @@ const els = {
   concLevelValue: document.getElementById('conc-level-value'),
   denoiserSelect: document.getElementById('denoiser-select'),
   loadingMessage: document.getElementById('loading-message'),
+  loadingProgress: document.getElementById('loading-progress'),
+  loadingProgressFill: document.getElementById('loading-progress-fill'),
   status: document.getElementById('status'),
   progress: document.getElementById('progress'),
   latency: document.getElementById('latency'),
@@ -273,20 +275,52 @@ async function populateDevices() {
 const MODEL_URLS = ['./models/silero_vad.onnx', './models/dns64.int8.onnx'];
 
 async function preloadModels() {
+  const totalPerFile = new Array(MODEL_URLS.length).fill(0);
+  const loadedPerFile = new Array(MODEL_URLS.length).fill(0);
+
+  function updateProgressBar() {
+    const total = totalPerFile.reduce((a, b) => a + b, 0);
+    if (total <= 0) return; // no Content-Length known yet for any file
+    const loaded = loadedPerFile.reduce((a, b) => a + b, 0);
+    const pct = Math.min(100, (loaded / total) * 100);
+    els.loadingProgressFill.style.width = `${pct}%`;
+  }
+
   try {
     await Promise.all(
-      MODEL_URLS.map(async (url) => {
+      MODEL_URLS.map(async (url, i) => {
         const response = await fetch(url);
         if (!response.ok) throw new Error(`${response.status} ${response.statusText} (${url})`);
-        // fetch()'s promise resolves once response headers arrive, not once
-        // the body finishes downloading - reading it out is what actually
-        // waits for (and caches) the full file.
-        await response.arrayBuffer();
+        totalPerFile[i] = Number(response.headers.get('content-length')) || 0;
+
+        if (!response.body) {
+          // Streaming response bodies aren't supported here - fall back to
+          // an all-at-once wait with no incremental progress for this file.
+          await response.arrayBuffer();
+          loadedPerFile[i] = totalPerFile[i];
+          updateProgressBar();
+          return;
+        }
+
+        // fetch()'s own promise resolves once response headers arrive, not
+        // once the body finishes downloading - reading the stream out (via
+        // a reader instead of response.arrayBuffer(), to get incremental
+        // byte counts for the progress bar) is what actually waits for
+        // (and caches) the full file.
+        const reader = response.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          loadedPerFile[i] += value.length;
+          updateProgressBar();
+        }
       })
     );
     els.loadingMessage.hidden = true;
+    els.loadingProgress.hidden = true;
   } catch (e) {
     els.loadingMessage.textContent = `Could not preload models: ${e.message}. You can still press Start to load them then.`;
+    els.loadingProgress.hidden = true;
   } finally {
     els.startStopBtn.disabled = false;
   }
