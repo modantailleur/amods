@@ -4,6 +4,7 @@
 // can't be identical (input-latency reporting, output-device latency
 // tuning granularity, etc).
 import { applyFade } from './audio-utils.js';
+import { DENOISER_MODEL_PATHS } from './denoiser-models.js';
 
 const CHUNK_SIZE_AT_48K = 2400; // 50ms, matches stream_config.buffer_duration in the Python default config
 
@@ -45,6 +46,7 @@ let micStream = null;
 let sourceNode = null;
 let workletNode = null;
 let worker = null;
+let denoiserWorker = null; // separate Worker/thread for denoiser inference - see denoiser-proxy.js for why it can't share worker-engine.js's thread
 let running = false;
 
 // Idle mic-level preview + Ping share this lightweight context, separate
@@ -305,6 +307,12 @@ async function start() {
       els.status.textContent = `Engine error: ${msg.message}`;
     } else if (msg.type === 'ready') {
       els.status.textContent = 'Running';
+    } else if (msg.type === 'denoiseRequest') {
+      // Relay to the separate denoiser worker (see below) rather than
+      // handling it here - the whole point is that this heavy inference
+      // must never run on worker-engine.js's own thread.
+      if (denoiserWorker) denoiserWorker.postMessage(msg, [msg.y.buffer]);
+      else worker.postMessage({ type: 'denoiseError', id: msg.id, message: 'denoiser worker not available' });
     }
   };
   workletNode.port.onmessage = (event) => {
@@ -317,11 +325,32 @@ async function start() {
     }
   };
 
+  // Denoiser inference runs in its own dedicated Worker (its own OS
+  // thread), never on worker-engine.js's - a single Worker has only one
+  // thread, so even a "fire and forget" call to the denoiser there would
+  // still block real-time chunk processing for as long as inference takes
+  // (measured: up to ~1s). This is the fix for that; see
+  // denoiser-proxy.js's header comment for the full explanation.
+  const denoiserPath = DENOISER_MODEL_PATHS[els.denoiserSelect.value]; // undefined for "none"
+  if (denoiserPath) {
+    denoiserWorker = new Worker('./js/denoiser-worker.js', { type: 'module' });
+    denoiserWorker.onmessage = (event) => {
+      const msg = event.data;
+      if (msg.type === 'denoiseResult' || msg.type === 'denoiseError') {
+        worker.postMessage(msg, msg.result ? [msg.result.buffer] : []);
+      } else if (msg.type === 'error') {
+        els.status.textContent = `Denoiser failed to load: ${msg.message}`;
+        worker.postMessage({ type: 'denoiserInitError', message: msg.message });
+      }
+    };
+    denoiserWorker.postMessage({ type: 'init', path: denoiserPath, sr });
+  }
+
   worker.postMessage({
     type: 'init',
     config: {
       sr,
-      denoiserModel: els.denoiserSelect.value,
+      denoiserEnabled: Boolean(denoiserPath),
       concealingThreshold: rateToThreshold(els.concealingRate.value),
       concealerMemoryThreshold: rateToThreshold(els.concealerMemoryRate.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
@@ -354,6 +383,10 @@ function stop() {
     worker.postMessage({ type: 'stop' });
     worker.terminate();
     worker = null;
+  }
+  if (denoiserWorker) {
+    denoiserWorker.terminate();
+    denoiserWorker = null;
   }
   if (workletNode) {
     workletNode.port.postMessage({ type: 'stop' });

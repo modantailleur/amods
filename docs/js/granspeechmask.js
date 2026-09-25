@@ -129,53 +129,63 @@ export class GranSpeechMask {
    * past memoryMaxlen).
    */
   async _feedMemory(y, voiceName = '') {
-    const newMemory = [];
-    let denoised = y;
-    if (this.denoise && this.denoiser) {
-      denoised = await this.denoiser.predict(y);
-      if (denoised.length > y.length) denoised = denoised.subarray(0, y.length);
-      else if (denoised.length < y.length) {
-        const padded = new Float32Array(y.length);
-        padded.set(denoised);
-        denoised = padded;
+    // newVoiceSinceFeed/stopProcessing must reset even if this throws (e.g.
+    // the remote denoiser worker failed to load its model) - otherwise a
+    // single failure would permanently wedge memory refresh, since
+    // stopProcessing is only ever cleared below. Worth guarding explicitly
+    // now that the denoiser call crosses a Worker boundary (see
+    // denoiser-proxy.js) and so has real, independent failure modes that
+    // didn't exist when it ran in-process.
+    try {
+      const newMemory = [];
+      let denoised = y;
+      if (this.denoise && this.denoiser) {
+        denoised = await this.denoiser.predict(y);
+        if (denoised.length > y.length) denoised = denoised.subarray(0, y.length);
+        else if (denoised.length < y.length) {
+          const padded = new Float32Array(y.length);
+          padded.set(denoised);
+          denoised = padded;
+        }
       }
-    }
 
-    // Matches numpy.array_split(y, n): the first `remainder` chunks get one
-    // extra sample, not just the last one.
-    const n = this.nConcealerBeforeDenoise;
-    const base = Math.floor(y.length / n);
-    const remainder = y.length % n;
-    const fadeSize = Math.max(Math.trunc(this.sr * this.fadeDuration), Math.trunc(this.sr / 100)); // min 10ms
+      // Matches numpy.array_split(y, n): the first `remainder` chunks get
+      // one extra sample, not just the last one.
+      const n = this.nConcealerBeforeDenoise;
+      const base = Math.floor(y.length / n);
+      const remainder = y.length % n;
+      const fadeSize = Math.max(Math.trunc(this.sr * this.fadeDuration), Math.trunc(this.sr / 100)); // min 10ms
 
-    let start = 0;
-    for (let i = 0; i < n; i++) {
-      const size = base + (i < remainder ? 1 : 0);
-      const end = start + size;
-      if (start >= end) { start = end; continue; }
-      let clip = applyFade(denoised.subarray(start, end), fadeSize);
-      const clipOriginal = y.subarray(start, end);
-      // Features come from the original (non-denoised) segment - the live
-      // query side (pendingVoice) is raw mic audio, never denoised, so
-      // matching against denoised candidate features would compare across
-      // two different audio domains.
-      const feat = featureExtractor(clipOriginal, this.sr, { norm: true });
-      // eslint-disable-next-line no-await-in-loop
-      if (await this.vad.predict(clip)) {
-        newMemory.push({ clip: Float32Array.from(clip), feat, cooldown: 0, voiceName });
+      let start = 0;
+      for (let i = 0; i < n; i++) {
+        const size = base + (i < remainder ? 1 : 0);
+        const end = start + size;
+        if (start >= end) { start = end; continue; }
+        let clip = applyFade(denoised.subarray(start, end), fadeSize);
+        const clipOriginal = y.subarray(start, end);
+        // Features come from the original (non-denoised) segment - the live
+        // query side (pendingVoice) is raw mic audio, never denoised, so
+        // matching against denoised candidate features would compare across
+        // two different audio domains.
+        const feat = featureExtractor(clipOriginal, this.sr, { norm: true });
+        // eslint-disable-next-line no-await-in-loop
+        if (await this.vad.predict(clip)) {
+          newMemory.push({ clip: Float32Array.from(clip), feat, cooldown: 0, voiceName });
+        }
+        start = end;
       }
-      start = end;
-    }
 
-    while (this.memory.length < this.memoryMaxlen && newMemory.length > 0) {
-      this.memory.push(newMemory.shift());
-    }
-    this.memory = this.memory.concat(newMemory);
-    while (this.memory.length > this.memoryMaxlen) this.memory.shift();
+      while (this.memory.length < this.memoryMaxlen && newMemory.length > 0) {
+        this.memory.push(newMemory.shift());
+      }
+      this.memory = this.memory.concat(newMemory);
+      while (this.memory.length > this.memoryMaxlen) this.memory.shift();
 
-    if (!this.isStream) this.pendingVoice = [];
-    this.newVoiceSinceFeed = 0;
-    this.stopProcessing = false;
+      if (!this.isStream) this.pendingVoice = [];
+    } finally {
+      this.newVoiceSinceFeed = 0;
+      this.stopProcessing = false;
+    }
   }
 
   /**

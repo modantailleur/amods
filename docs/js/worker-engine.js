@@ -1,7 +1,16 @@
 // Dedicated Worker (not the audio thread, not the main/UI thread) running
-// the actual amods.Stream port: VAD, denoiser, GranSpeechMask, limiter.
-// Talks to the main thread via postMessage; the main thread relays raw mic
-// chunks in (from the AudioWorkletNode's port) and processed audio back out.
+// the actual amods.Stream port: VAD, GranSpeechMask, limiter. Talks to the
+// main thread via postMessage; the main thread relays raw mic chunks in
+// (from the AudioWorkletNode's port) and processed audio back out.
+//
+// The denoiser itself deliberately does NOT live here, even though
+// GranSpeechMask's memory-refresh calls it directly - see
+// denoiser-proxy.js's header comment: a single Worker has only one thread,
+// so a ~1s denoiser inference call running on this same thread would block
+// real-time chunk processing for its whole duration, however "background"
+// it looks in the JS source. RemoteDenoiser instead hands that call off to
+// docs/js/denoiser-worker.js, a second dedicated Worker, via the main
+// thread relay - see main.js's start().
 import * as ort from '../vendor/ort.min.mjs';
 
 globalThis.ort = ort;
@@ -12,34 +21,21 @@ ort.env.wasm.numThreads = 1;
 ort.env.wasm.wasmPaths = '../vendor/';
 
 import { SileroVAD } from './vad-silero.js';
-import { DnsDenoiser } from './denoiser-dns64.js';
 import { GranSpeechMask } from './granspeechmask.js';
 import { ConcealerStream } from './stream.js';
+import { RemoteDenoiser } from './denoiser-proxy.js';
 
 let stream = null;
 let concealer = null;
 let sourceVad = null;
-
-// docs/index.html's "Denoiser" dropdown value -> model file. "int8" is
-// dns64 with its LSTM weights dynamically quantized to int8 (see
-// scripts/quantize_dns64.py for why only LSTM, not also Conv): ~84MB vs.
-// the original's ~134MB, verified to load and run correctly in an actual
-// browser (not just Node) at a real, if modest, runtime cost.
-const DENOISER_MODEL_PATHS = {
-  original: '../models/dns64.onnx',
-  int8: '../models/dns64.int8.onnx',
-};
+let remoteDenoiser = null;
 
 async function init(cfg) {
-  const denoiserPath = DENOISER_MODEL_PATHS[cfg.denoiserModel]; // undefined for "none"
-  const [vadSession, dnsSession] = await Promise.all([
-    ort.InferenceSession.create('../models/silero_vad.onnx'),
-    denoiserPath ? ort.InferenceSession.create(denoiserPath) : Promise.resolve(null),
-  ]);
+  const vadSession = await ort.InferenceSession.create('../models/silero_vad.onnx');
 
   sourceVad = new SileroVAD(vadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr });
   const concealerVad = new SileroVAD(vadSession, { logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr });
-  const denoiser = dnsSession ? new DnsDenoiser(dnsSession, { sr: cfg.sr }) : null;
+  remoteDenoiser = cfg.denoiserEnabled ? new RemoteDenoiser() : null;
 
   const concealerConfig = {
     memory_maxlen: 100,
@@ -54,9 +50,9 @@ async function init(cfg) {
     pending_conc_max_size: 3 * cfg.sr,
     freeze_learning: false,
     decision_win: 0.3,
-    denoise: Boolean(denoiserPath),
+    denoise: cfg.denoiserEnabled,
   };
-  concealer = new GranSpeechMask(cfg.sr, concealerConfig, { denoiser, vad: concealerVad });
+  concealer = new GranSpeechMask(cfg.sr, concealerConfig, { denoiser: remoteDenoiser, vad: concealerVad });
 
   const streamConfig = {
     sr: cfg.sr,
@@ -119,6 +115,13 @@ self.onmessage = (event) => {
       break;
     case 'reset':
       if (stream) stream.resetState();
+      break;
+    case 'denoiseResult':
+    case 'denoiseError':
+      if (remoteDenoiser) remoteDenoiser.handleMessage(msg);
+      break;
+    case 'denoiserInitError':
+      if (remoteDenoiser) remoteDenoiser.rejectAll(msg.message);
       break;
     case 'stop':
       if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
