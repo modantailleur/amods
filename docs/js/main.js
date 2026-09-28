@@ -270,9 +270,16 @@ async function populateDevices() {
 // denoiser-worker.js's own ort.InferenceSession.create() calls (which fetch
 // these same URLs) resolve from cache instead of hitting the network -
 // that's what was making the first Start after opening the page slow,
-// especially for the ~34MB denoiser. The Start button stays disabled (see
+// especially for the ~50MB denoiser. The Start button stays disabled (see
 // its `disabled` attribute in index.html) until this finishes.
-const MODEL_URLS = ['./models/silero_vad.onnx', './models/dns64.int8.onnx'];
+// DENOISER_MODEL_PATHS' values are written relative to docs/js/ (that's
+// where denoiser-worker.js itself resolves them from) - fetch() here
+// resolves relative to the page (docs/) instead, hence the '../' -> './'
+// swap. Deriving this from DENOISER_MODEL_PATHS.int8 instead of
+// hardcoding the filename is what's needed for this to stay in sync
+// automatically whenever that mapping changes (this list previously drifted
+// out of sync with it, silently preloading the wrong model file).
+const MODEL_URLS = ['./models/silero_vad.onnx', DENOISER_MODEL_PATHS.int8.replace(/^\.\.\//, './')];
 
 async function preloadModels() {
   const totalPerFile = new Array(MODEL_URLS.length).fill(0);

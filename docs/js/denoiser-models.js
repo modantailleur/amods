@@ -3,14 +3,18 @@
 // spin up docs/js/denoiser-worker.js at all, and with which model) - see
 // worker-engine.js's header comment for why the denoiser itself no longer
 // lives there.
-// dns64.int8.onnx (~34MB) is produced by scripts/quantize_dns64_max.py -
-// LSTM weights quantized dynamically to int8, Conv/ConvTranspose weights
-// quantized statically (QDQ format, calibrated on real speech) to int8 too.
-// Quality is signal-level dependent - near-lossless on normal/loud speech,
-// more noticeable on quiet passages - see that script's docstring for
-// measured numbers before changing this further.
+// dns64.int8.float16conv.onnx (~50MB) is produced by quantize_dns64.py +
+// float16_denoiser_conv.py - LSTM weights quantized dynamically to int8,
+// Conv/ConvTranspose weights converted to float16 (~lossless).
+//
+// dns64.int8.onnx (~34MB, produced by scripts/quantize_dns64_max.py -
+// same LSTM step, but Conv/ConvTranspose quantized to int8 too, via static
+// QDQ quantization) is smaller but noticeably noisier in practice - not
+// currently used by the dropdown below, kept on disk/in the repo in case
+// that trade-off becomes preferable later. See quantize_dns64_max.py's
+// docstring for the measured quality numbers behind that call.
 
 export const DENOISER_MODEL_PATHS = {
   original: '../models/dns64.onnx',
-  int8: '../models/dns64.int8.onnx',
+  int8: '../models/dns64.int8.float16conv.onnx',
 };

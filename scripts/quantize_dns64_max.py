@@ -1,10 +1,16 @@
 """
-Reproduces docs/models/dns64.int8.onnx (the file docs/index.html's denoiser
-dropdown actually ships as "quantized") from docs/models/dns64.onnx. This
-supersedes the older two-script pipeline (quantize_dns64.py +
-float16_denoiser_conv.py, kept in the repo for reference/history - see their
-own docstrings) by additionally quantizing Conv/ConvTranspose weights to
-int8 instead of leaving them at float16, for a meaningfully smaller file.
+Produces docs/models/dns64.int8.onnx, a more aggressively quantized
+alternative to the shipped denoiser (docs/models/dns64.int8.float16conv.onnx,
+produced by quantize_dns64.py + float16_denoiser_conv.py - see those
+scripts' docstrings) - NOT currently used by docs/index.html's denoiser
+dropdown. Tried and measured working (smaller, loads fine in-browser), but
+judged noticeably noisier by ear in practice despite reasonable cosine-
+similarity numbers on loud passages (see the quality section below) - kept
+on disk/in the repo in case that size/quality trade-off becomes preferable
+later, not deleted.
+
+Additionally quantizes Conv/ConvTranspose weights to int8 instead of
+leaving them at float16, for a meaningfully smaller file.
 
 Two-step pipeline, run in this order:
   1. Static QDQ int8 quantization of Conv/ConvTranspose on the ORIGINAL
@@ -40,24 +46,24 @@ float16, which was ~lossless) for Conv, and is genuinely audible, not just a
 metric artifact:
   - On a normal-to-loud speech passage (e.g. audios/office_audio_LJSpeech.wav
     at 5s in, amplitude up to ~0.6): cosine similarity vs. the original
-    float32 model is 0.9927 - close to the old float16 pipeline's 0.99995,
-    not perceptibly different in casual listening.
+    float32 model is 0.9927 - close to the old float16 pipeline's 0.99995.
   - On a quiet passage (the same file's first ~2s, amplitude under ~0.05):
     cosine similarity drops to ~0.77 (and lower still against synthetic
     low-amplitude noise, ~0.39) - quantization noise has a roughly constant
     absolute floor, so it dominates proportionally more on quiet audio.
-    Expect this model's output to sound rougher than the old pipeline's
-    during pauses, trailing-off words, or breath sounds, even though normal-
-    volume speech is essentially unaffected.
+  Despite the loud-passage number looking close to lossless, listening to
+  real output side by side with the float16 pipeline's (not just this
+  script's single-input cosine-similarity check) revealed audible extra
+  noise overall - the metric alone understated it. Trust your ears over
+  this script's printed numbers if revisiting this.
 This script's own verification step below prints both cases - don't just
 check the loud-passage number.
 
 Usage:
     python scripts/quantize_dns64_max.py
 Reads docs/models/dns64.onnx and audios/office_audio_LJSpeech.wav, writes
-docs/models/dns64.int8.onnx directly (this IS the shipped file - there is no
-separate staging name to promote, unlike the old pipeline, since this has
-already been verified both in-browser and by ear).
+docs/models/dns64.int8.onnx directly - NOT the currently-shipped filename
+(that's dns64.int8.float16conv.onnx, from the other pipeline).
 
 Requires: pip install onnx onnxruntime librosa numpy
 """
