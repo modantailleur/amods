@@ -11,6 +11,12 @@
 import { applyFade } from './audio-utils.js';
 import { DENOISER_MODEL_PATHS } from './denoiser-models.js';
 
+// Set by debug.html (never by index.html) before this module loads. Gates
+// every debug-only feature below so the production page never wires any of
+// it up - on index.html, #debug-btn etc. simply don't exist in the DOM.
+const DEBUG_MODE = window.DEBUG_MODE === true;
+const DEBUG_AUDIO_PATH = './audios/test.wav';
+
 const CHUNK_SIZE_AT_48K = 2400; // 50ms, matches stream_config.buffer_duration in the Python default config
 
 // "Ping" test tone - same constants as amods.gui (PING_FREQUENCY_HZ etc.).
@@ -45,6 +51,8 @@ const els = {
   status: document.getElementById('status'),
   progress: document.getElementById('progress'),
   latency: document.getElementById('latency'),
+  debugBtn: document.getElementById('debug-btn'),
+  debugStatus: document.getElementById('debug-status'),
 };
 
 let audioContext = null; // the real session's AudioContext (Start/Stop)
@@ -54,6 +62,8 @@ let workletNode = null;
 let worker = null;
 let denoiserWorker = null; // separate Worker/thread for denoiser inference - see denoiser-proxy.js for why it can't share worker-engine.js's thread
 let running = false;
+let debugMode = false; // true while the current session's input is DEBUG_AUDIO_PATH instead of the mic
+let debugElapsedTimer = null;
 
 // Idle mic-level preview + Ping share this lightweight context, separate
 // from the real session's - mirrors amods.gui's separate "idle input
@@ -330,30 +340,54 @@ async function preloadModels() {
     els.loadingProgress.hidden = true;
   } finally {
     els.startStopBtn.disabled = false;
+    if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = false;
   }
 }
 
 // ── Start / Stop ────────────────────────────────────────────────────────
-async function start() {
+// debugFilePath (DEBUG_MODE only): instead of opening the mic, decodes that
+// file into an AudioBuffer and feeds it into the exact same
+// AudioWorkletNode graph via an AudioBufferSourceNode. This is deliberately
+// NOT any kind of offline/batch decode - an AudioBufferSourceNode connected
+// to a live, running AudioContext plays out at the context's own real-time
+// rate, exactly like a live MediaStreamSource would, so a 2-minute file
+// takes 2 real minutes and exercises every real-time code path (VAD timing,
+// the queue/staleness logic in worker-engine.js, etc.) rather than skipping
+// past them.
+async function start({ debugFilePath = null } = {}) {
   els.startStopBtn.disabled = true;
-  els.status.textContent = 'Starting…';
+  if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = true;
+  els.status.textContent = debugFilePath ? 'Starting debug replay…' : 'Starting…';
 
   stopInputPreview();
   if (pingActive) return; // Ping's own finally{} will restore state; don't fight it
 
+  debugMode = Boolean(debugFilePath);
   audioContext = new AudioContext();
   const sr = audioContext.sampleRate;
 
-  const micDeviceId = selectedMicId();
-  micStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      channelCount: 1,
-    },
-  });
+  let debugSourceNode = null;
+  if (debugFilePath) {
+    const response = await fetch(debugFilePath);
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText} (${debugFilePath})`);
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    debugSourceNode = audioContext.createBufferSource();
+    debugSourceNode.buffer = audioBuffer;
+    sourceNode = debugSourceNode;
+  } else {
+    const micDeviceId = selectedMicId();
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+      },
+    });
+    sourceNode = audioContext.createMediaStreamSource(micStream);
+  }
 
   await audioContext.audioWorklet.addModule('./js/worklet-processor.js');
   workletNode = new AudioWorkletNode(audioContext, 'concealer-worklet-processor', {
@@ -427,7 +461,6 @@ async function start() {
     },
   });
 
-  sourceNode = audioContext.createMediaStreamSource(micStream);
   sourceNode.connect(workletNode);
   workletNode.connect(audioContext.destination);
 
@@ -441,13 +474,33 @@ async function start() {
   }
 
   running = true;
-  els.startStopBtn.textContent = 'Stop';
-  els.startStopBtn.disabled = false;
+
+  if (debugFilePath) {
+    debugSourceNode.start();
+    debugSourceNode.onended = () => {
+      if (running && debugMode) stop(); // natural end of the file, same cleanup as pressing Stop
+    };
+    const totalS = debugSourceNode.buffer.duration;
+    const startedAt = audioContext.currentTime;
+    debugElapsedTimer = setInterval(() => {
+      const elapsedS = Math.min(totalS, audioContext.currentTime - startedAt);
+      if (els.debugStatus) {
+        els.debugStatus.textContent = `Replaying ${debugFilePath} as live mic input: ${elapsedS.toFixed(0)}s / ${totalS.toFixed(0)}s`;
+      }
+    }, 500);
+  }
+
   setControlsEnabled(false);
+  updateStartStopUI();
 }
 
 function stop() {
   els.startStopBtn.disabled = true;
+  if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = true;
+  if (debugElapsedTimer) {
+    clearInterval(debugElapsedTimer);
+    debugElapsedTimer = null;
+  }
   if (worker) {
     worker.postMessage({ type: 'stop' });
     worker.terminate();
@@ -463,6 +516,13 @@ function stop() {
     workletNode = null;
   }
   if (sourceNode) {
+    if (typeof sourceNode.stop === 'function') {
+      try {
+        sourceNode.stop(); // AudioBufferSourceNode (debug) only - MediaStreamAudioSourceNode has no stop()
+      } catch {
+        // Already ended naturally (onended already fired) - harmless.
+      }
+    }
     sourceNode.disconnect();
     sourceNode = null;
   }
@@ -475,15 +535,41 @@ function stop() {
     audioContext = null;
   }
   running = false;
-  els.startStopBtn.textContent = 'Start';
-  els.startStopBtn.disabled = false;
+  debugMode = false;
   els.status.textContent = 'Idle — press Start to begin';
   els.progress.textContent = '—';
   els.latency.textContent = '—';
   els.inLevelFill.style.width = '0%';
   els.outLevelFill.style.width = '0%';
+  if (els.debugStatus) els.debugStatus.textContent = '';
   setControlsEnabled(true);
+  updateStartStopUI();
   startInputPreview();
+}
+
+// Keeps the two start buttons (and debug.html's third) from ever both
+// looking "startable" or both "stoppable" at once - exactly one session
+// (mic or debug) can run at a time, and whichever button started it is the
+// only one that can stop it.
+function updateStartStopUI() {
+  if (!running) {
+    els.startStopBtn.textContent = 'Start';
+    els.startStopBtn.disabled = false;
+    if (DEBUG_MODE && els.debugBtn) {
+      els.debugBtn.textContent = 'Start debugging';
+      els.debugBtn.disabled = false;
+    }
+  } else if (debugMode) {
+    els.startStopBtn.disabled = true;
+    if (DEBUG_MODE && els.debugBtn) {
+      els.debugBtn.textContent = 'Stop debug';
+      els.debugBtn.disabled = false;
+    }
+  } else {
+    els.startStopBtn.textContent = 'Stop';
+    els.startStopBtn.disabled = false;
+    if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = true;
+  }
 }
 
 function setControlsEnabled(enabled) {
@@ -540,9 +626,20 @@ els.startStopBtn.addEventListener('click', () => {
   if (running) stop();
   else start().catch((e) => {
     els.status.textContent = `Failed to start: ${e.message}`;
-    els.startStopBtn.disabled = false;
+    updateStartStopUI();
   });
 });
+
+if (DEBUG_MODE && els.debugBtn) {
+  els.debugBtn.addEventListener('click', () => {
+    if (running) stop();
+    else start({ debugFilePath: DEBUG_AUDIO_PATH }).catch((e) => {
+      els.status.textContent = `Failed to start debug replay: ${e.message}`;
+      debugMode = false;
+      updateStartStopUI();
+    });
+  });
+}
 
 els.pingBtn.addEventListener('click', () => onPing());
 

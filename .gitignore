@@ -12,6 +12,12 @@ dist/
 .pytest_cache/
 .venv/
 
-# Local test/output data (not part of the installable package)
-audios/
+# Local test/output data (not part of the installable package). Anchored to
+# the repo root (leading /) so this does NOT also match docs/audios/ - that
+# one holds the web debug page's fixed test input, which needs to actually
+# be committed/deployed for docs/debug.html to work anywhere but this
+# machine (an un-anchored pattern here would exclude the whole docs/audios/
+# directory, and a !docs/audios/test.wav negation can't undo that - git
+# won't descend into an already-excluded directory to check negations).
+/audios/
 output/
