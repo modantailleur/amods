@@ -57,7 +57,7 @@ const els = {
   vizSelection: document.getElementById('viz-selection'),
   vizSelectionDot: document.getElementById('viz-selection-dot'),
   vizDenoise: document.getElementById('viz-denoise'),
-  vizDenoiseLabel: document.getElementById('viz-denoise-label'),
+  vizDenoiseSecs: document.getElementById('viz-denoise-secs'),
   vizMemVad: document.getElementById('viz-mem-vad'),
   vizCandidates: document.getElementById('viz-candidates'),
   vizMemoryDots: document.getElementById('viz-memory-dots'),
@@ -822,12 +822,21 @@ function updateConcealerViz(debug) {
   }
 
   if (els.vizDenoise) els.vizDenoise.classList.toggle('viz-block-active', Boolean(debug.denoiseRunning));
-  if (els.vizDenoiseLabel) {
-    // Always show the parenthesized part, even as a placeholder ("-.-s") -
+  if (els.vizDenoiseSecs) {
+    // Always show the parenthesized part, even as a placeholder ("--.-s") -
     // switching between "Noise reduction" and "Noise reduction (Xs)" would
     // change the label's width and shift everything after it in the row.
-    const secs = debug.msSinceDenoiseStart != null ? (debug.msSinceDenoiseStart / 1000).toFixed(1) : '-.-';
-    els.vizDenoiseLabel.textContent = `Noise reduction (${secs}s)`;
+    // Zero-padded to a fixed "00.0" shape (so 1s reads "01.0s", not "1.0s")
+    // for the same reason - a single vs. double-digit second count would
+    // otherwise shift the row too. The actual pixel-width stability comes
+    // from #viz-denoise-secs's own fixed-width CSS box (see style.css) -
+    // "-" and "0" aren't the same glyph width in a proportional font, so
+    // matching character COUNT alone (this padStart) isn't sufficient on
+    // its own, only necessary.
+    const secs = debug.msSinceDenoiseStart != null
+      ? (debug.msSinceDenoiseStart / 1000).toFixed(1).padStart(4, '0')
+      : '--.-';
+    els.vizDenoiseSecs.textContent = secs;
   }
 
   // A new feed cycle starting is when we first know how many candidates
@@ -930,7 +939,7 @@ function resetConcealerViz() {
     els.vizSelectionDot.title = 'no clip currently selected';
   }
   if (els.vizDenoise) els.vizDenoise.classList.remove('viz-block-active');
-  if (els.vizDenoiseLabel) els.vizDenoiseLabel.textContent = 'Noise reduction (-.-s)';
+  if (els.vizDenoiseSecs) els.vizDenoiseSecs.textContent = '--.-';
   if (els.vizMemVad) {
     els.vizMemVad.classList.remove('viz-block-active');
     clearTimeout(els.vizMemVad.__pulseTimeout);

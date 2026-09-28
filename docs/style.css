@@ -306,9 +306,8 @@ select {
 /* The memory branch's row (denoise -> VAD -> candidates) has the most
    content of any row - keep it on one line rather than letting the
    candidates dots drop to a second line under narrow/cramped conditions.
-   Relies on "Noise red. (-.-s)" (not the longer "Noise reduction (...)")
-   actually fitting - see main.js's fixed-width placeholder for why the
-   label's width never changes once real data arrives either. */
+   See main.js's fixed-width "(--.-s)"/"(00.0s)"-shaped placeholder for why
+   the label's own width never changes once real data arrives either. */
 .viz-flow-nowrap {
   flex-wrap: nowrap;
 }
@@ -317,6 +316,20 @@ select {
   font-size: 0.75rem;
   color: #6b7280;
   flex: none;
+}
+
+/* "-" and "0" don't share the same glyph width in a proportional font (the
+   page's system-ui stack), so the idle placeholder ("--.-") and a real
+   reading ("00.0") being the same character COUNT still isn't enough to
+   keep the row from shifting - an explicit fixed-width box (sized to fit
+   the widest realistic case) makes the box itself immovable regardless of
+   which glyphs happen to be inside it. tabular-nums additionally keeps
+   different digits (e.g. "1" vs "0") the same width as each other. */
+#viz-denoise-secs {
+  display: inline-block;
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Deliberately NOT button-shaped (no border, no fill, no rounded box) -
