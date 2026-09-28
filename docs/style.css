@@ -388,6 +388,37 @@ select {
    an empty candidate slot (no VAD verdict yet) is plain white with a thin
    outline, not gray, so it's visually distinct from "available" memory. */
 .viz-dot-empty { background: #fff; border: 1px solid #cbd0d8; }
+/* Memory queue only: reserves room for the extra dots an eviction transition
+   can briefly need (up to one candidate slot's worth) without ever being
+   seen or counted - visibility:hidden (not display:none) keeps its layout
+   box, which is the whole point: the row count the flex-wrap settles on
+   never changes between idle/normal/mid-transition, so a transition never
+   pops a new row into view only to have it collapse away again right after. */
+.viz-dot-reserved { visibility: hidden; }
+
+/* Memory queue is a FIFO: new entries land at the end, and once full, that
+   many entries fall off the front to make room. Rendering straight to the
+   fixed slot count made this read as "new entries overwrite the newest
+   ones" - so on an eviction, the queue briefly grows PAST its normal count
+   (see renderMemoryTransition in main.js): the entries actually leaving
+   shrink away at the far left while the new ones pop in at the far right,
+   past the normal end, at the same moment - then the queue snaps back down
+   to its fixed count once both animations finish, which is also exactly
+   when the leaving entries become invisible, so the snap reads as closing a
+   gap rather than a jump cut. */
+@keyframes viz-enter-pop {
+  0% { transform: scale(0.2); opacity: 0.3; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes viz-exit-shrink {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0.2); opacity: 0; }
+}
+
+.viz-dot-entering { animation: viz-enter-pop 700ms ease-out; }
+.viz-dot-exiting { animation: viz-exit-shrink 700ms ease-in forwards; }
 
 .viz-legend {
   display: flex;

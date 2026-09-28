@@ -641,6 +641,11 @@ function updateStatus(status, timing) {
 // keeps something visible, not how long anything actually takes.
 const MEM_VAD_MIN_PULSE_MS = 400; // the memory branch's own VAD step is usually much faster than the 500ms poll interval - without a floor here it would almost never visibly appear at all
 const CANDIDATES_DISPLAY_MS = 800; // how long a candidate slot stays colored before reverting to its empty look, not how long the slot itself exists (it always exists)
+// How long the memory queue's "grow past its normal slot count, then snap
+// back" eviction animation runs - see renderMemoryTransition below. Matches
+// viz-enter-pop/viz-exit-shrink's own CSS animation duration so the visual
+// growth/shrink and the actual DOM collapse happen at the same moment.
+const EVICT_TRANSITION_MS = 700;
 // nConcealerBeforeDenoise's current value (ceil(pendingVoiceMaxDuration /
 // concealer_duration) = ceil(2/0.3), both fixed in worker-engine.js's
 // concealerConfig) - shown before any real telemetry exists so the row is
@@ -660,6 +665,33 @@ let lastKnownMemorySlots = MEMORY_SLOTS_DEFAULT;
 // together whenever a cycle adds anything, read on every render below.
 let memoryFlashCount = 0;
 let memoryFlashUntil = 0;
+// The memory-dots block below re-renders (full innerHTML replace) on every
+// ~500ms status tick, not just once when a flash starts - and CANDIDATES_
+// DISPLAY_MS (800ms) outlives a single tick, so without this flag the same
+// entries would get their entering animation class re-applied to freshly-
+// recreated elements on the next tick too, restarting the CSS animation from
+// scratch (visible as the dots growing twice in a row instead of once). Set
+// true right after the first render that includes the flash (which may be
+// the eviction-transition render below, if this cycle evicted anything, or
+// otherwise the plain per-tick render), cleared whenever a new flash window
+// begins.
+let memoryFlashAnimated = false;
+// debug.memory always reflects the post-merge state - by the time a cycle's
+// evicted entries show up here, GranSpeechMask has already dropped them from
+// its own array, so there is no "real" data left to animate them with. This
+// holds the previous tick's debug.memory (captured at the end of every tick,
+// below) purely so that WHEN an eviction is detected, we still have each
+// evicted entry's actual last-seen classification (cooldown/tooCloseToBuffer)
+// to render it fading out with, rather than guessing. Feed cycles are spaced
+// seconds apart in practice (far more than the ~500ms poll interval), so
+// "previous tick" reliably means "just before this cycle's merge".
+let previousMemorySnapshot = [];
+// Sitting at Date.now() + EVICT_TRANSITION_MS while an eviction's grow/shrink
+// animation (see renderMemoryTransition) is on screen - the plain per-tick
+// render at the bottom of updateConcealerViz backs off until this passes, so
+// it doesn't collapse the transitional (over-100) view before the animation
+// has had a chance to play.
+let evictTransitionUntil = 0;
 
 function renderDots(container, dotSpecs) {
   if (!container) return;
@@ -674,6 +706,75 @@ function emptyCandidateDots(count) {
 
 function emptyMemoryDots(count) {
   return Array.from({ length: count }, () => ({ cls: 'viz-dot-empty', title: 'empty slot' }));
+}
+
+// A cycle can add at most candidateSlots entries (that's every candidate
+// passing VAD), and evicts exactly that many once the queue is full - so the
+// queue's rendered DOM element count needs to be able to reach maxlen +
+// candidateSlots without ever growing the number of flex-wrapped rows versus
+// what's shown at rest. Rendering that many elements at ALL times (idle,
+// normal, mid-transition), padding with invisible-but-space-reserving
+// placeholders wherever the real content doesn't fill it, keeps the
+// rectangle's row count constant - so a transition never pops a new row into
+// existence only to have it vanish again once eviction finishes.
+function reservedMemoryDots(count) {
+  return Array.from({ length: Math.max(0, count) }, () => ({ cls: 'viz-dot-reserved', title: '' }));
+}
+
+function classifyMemoryEntry(entry, i, debug) {
+  if (i === debug?.selectedIndex) return { cls: 'viz-dot-blue', title: 'currently selected' };
+  if (entry.cooldown > 0) return { cls: 'viz-dot-orange', title: `on hold - reused ${entry.cooldown} cycles ago` };
+  if (entry.tooCloseToBuffer) return { cls: 'viz-dot-orange', title: 'on hold - too close to the live buffer' };
+  return { cls: 'viz-dot-neutral', title: 'available' };
+}
+
+// The queue's normal, fixed-slot-count render - used both on every plain
+// status tick and as the "snap back to size" step right after an eviction's
+// transition animation finishes (see renderMemoryTransition).
+function renderMemoryQueue(debug) {
+  const memory = debug.memory || [];
+  lastKnownMemorySlots = debug.memoryMaxlen || lastKnownMemorySlots;
+  const flashing = Date.now() < memoryFlashUntil;
+  const flashFromIndex = memory.length - memoryFlashCount;
+  const animateThisRender = flashing && !memoryFlashAnimated;
+  const candidateSlots = debug.candidateSlots || lastKnownCandidateSlots;
+  const slots = Array.from({ length: lastKnownMemorySlots }, (_, i) => {
+    if (i >= memory.length) return { cls: 'viz-dot-empty', title: 'empty slot' };
+    if (flashing && i >= flashFromIndex) {
+      const enterClass = animateThisRender ? ' viz-dot-entering' : '';
+      return { cls: `viz-dot-green${enterClass}`, title: 'just added to memory' };
+    }
+    return classifyMemoryEntry(memory[i], i, debug);
+  });
+  renderDots(els.vizMemoryDots, [...slots, ...reservedMemoryDots(candidateSlots)]);
+  if (animateThisRender) memoryFlashAnimated = true;
+}
+
+// Plays the "grow past the normal slot count, then snap back" animation: the
+// entries actually being evicted (their last-known look, from
+// previousMemorySnapshot) render fading out at the far left, at the same
+// moment the newly-added entries pop in at the far right - past the queue's
+// normal end, not in place of anything - so the queue is visibly longer
+// (maxlen + evictedSpecs.length dots) for EVICT_TRANSITION_MS. Once that
+// timer fires, renderMemoryQueue's normal fixed-length render takes over
+// again; since post-merge memory is exactly evictedSpecs-stripped-from-the-
+// front, the remaining dots are already in their final resting positions -
+// removing the (by-then invisible) faded-out prefix just closes the gap.
+function renderMemoryTransition(evictedSpecs, debug) {
+  const memory = debug.memory || [];
+  const flashFromIndex = memory.length - memoryFlashCount;
+  const exitingSpecs = evictedSpecs.map(({ cls, title }) => ({ cls: `${cls} viz-dot-exiting`, title }));
+  const newSpecs = memory.map((entry, i) => {
+    if (i >= flashFromIndex) return { cls: 'viz-dot-green viz-dot-entering', title: 'just added to memory' };
+    return classifyMemoryEntry(entry, i, debug);
+  });
+  // Same total element count as the normal render (maxlen + candidateSlots) -
+  // just with fewer reserved placeholders this time, since evictedSpecs is
+  // temporarily occupying part of that reserved room instead of sitting idle.
+  const candidateSlots = debug.candidateSlots || lastKnownCandidateSlots;
+  const reserved = reservedMemoryDots(candidateSlots - exitingSpecs.length);
+  renderDots(els.vizMemoryDots, [...exitingSpecs, ...newSpecs, ...reserved]);
+  memoryFlashAnimated = true; // the entering pop-in for the new tail already played above - the follow-up renderMemoryQueue call must not replay it
 }
 
 // Adds the active class right away, then removes it after durationMs -
@@ -700,7 +801,9 @@ function pulseDots(container, dotSpecs, durationMs, idleSpecs) {
 // Both rows are "there by default", even before Start is ever pressed -
 // not tied to any worker message.
 if (DEBUG_MODE && els.vizCandidates) renderDots(els.vizCandidates, emptyCandidateDots(lastKnownCandidateSlots));
-if (DEBUG_MODE && els.vizMemoryDots) renderDots(els.vizMemoryDots, emptyMemoryDots(lastKnownMemorySlots));
+if (DEBUG_MODE && els.vizMemoryDots) {
+  renderDots(els.vizMemoryDots, [...emptyMemoryDots(lastKnownMemorySlots), ...reservedMemoryDots(lastKnownCandidateSlots)]);
+}
 
 function updateConcealerViz(debug) {
   if (els.vizRtVad) els.vizRtVad.classList.toggle('viz-block-active', Boolean(debug.voiceActive));
@@ -771,26 +874,43 @@ function updateConcealerViz(debug) {
     if (addedCount > 0) {
       memoryFlashCount = addedCount;
       memoryFlashUntil = Date.now() + CANDIDATES_DISPLAY_MS;
+      memoryFlashAnimated = false;
+      // debug.memory already reflects the post-merge state - if it was
+      // already at capacity, adding addedCount entries while staying at
+      // that same capacity necessarily evicted addedCount entries from the
+      // front (see the comment above: trimming only ever removes from the
+      // front). If it wasn't full yet, nothing was evicted, just grown - the
+      // plain per-tick render below already handles that case (entries just
+      // pop in at the tail, the queue itself isn't at its limit yet).
+      const maxlen = debug.memoryMaxlen || lastKnownMemorySlots;
+      const evictCount = (debug.memory || []).length >= maxlen ? addedCount : 0;
+      if (evictCount > 0) {
+        const evictedSpecs = previousMemorySnapshot
+          .slice(0, evictCount)
+          .map((entry) => classifyMemoryEntry(entry, -1, null)); // -1/null: these positions have already shifted out of the new array, so "currently selected" can't apply to them
+        clearTimeout(els.vizMemoryDots.__evictTimeout);
+        renderMemoryTransition(evictedSpecs, debug);
+        evictTransitionUntil = Date.now() + EVICT_TRANSITION_MS;
+        els.vizMemoryDots.__evictTimeout = setTimeout(() => {
+          evictTransitionUntil = 0;
+          renderMemoryQueue(debug);
+        }, EVICT_TRANSITION_MS);
+      }
     }
   }
 
-  const memory = debug.memory || [];
-  lastKnownMemorySlots = debug.memoryMaxlen || lastKnownMemorySlots;
-  const flashing = Date.now() < memoryFlashUntil;
-  const flashFromIndex = memory.length - memoryFlashCount;
-  renderDots(
-    els.vizMemoryDots,
-    Array.from({ length: lastKnownMemorySlots }, (_, i) => {
-      if (i >= memory.length) return { cls: 'viz-dot-empty', title: 'empty memory slot' };
-      if (flashing && i >= flashFromIndex) return { cls: 'viz-dot-green', title: 'just added to memory' };
-      const entry = memory[i];
-      if (i === debug.selectedIndex) return { cls: 'viz-dot-blue', title: 'currently selected' };
-      if (entry.cooldown > 0) return { cls: 'viz-dot-orange', title: `on hold - reused ${entry.cooldown} cycles ago` };
-      if (entry.tooCloseToBuffer) return { cls: 'viz-dot-orange', title: 'on hold - too close to the live buffer' };
-      return { cls: 'viz-dot-neutral', title: 'available' };
-    })
-  );
-  if (els.vizMemoryCount) els.vizMemoryCount.textContent = `${memory.length} / ${debug.memoryMaxlen ?? '—'}`;
+  // While an eviction's grow/shrink transition is showing (see above), skip
+  // the plain fixed-slot render - it would otherwise immediately overwrite
+  // the transitional (over-limit) view with the collapsed one before the
+  // animation has had a chance to play. The scheduled setTimeout above (or,
+  // if nothing is evicting, this tick's own call right here) takes over once
+  // it's safe to.
+  if (Date.now() >= evictTransitionUntil) renderMemoryQueue(debug);
+  // Captured AFTER this tick's own merge-detection block above (if any) has
+  // already read it, so it always holds "memory just before the next merge" -
+  // see its declaration for why that's exactly what an eviction render needs.
+  previousMemorySnapshot = debug.memory || [];
+  if (els.vizMemoryCount) els.vizMemoryCount.textContent = `${(debug.memory || []).length} / ${debug.memoryMaxlen ?? '—'}`;
 }
 
 function resetConcealerViz() {
@@ -799,6 +919,10 @@ function resetConcealerViz() {
   lastSeenFeedCycleSeq = 0;
   memoryFlashCount = 0;
   memoryFlashUntil = 0;
+  memoryFlashAnimated = false;
+  previousMemorySnapshot = [];
+  evictTransitionUntil = 0;
+  if (els.vizMemoryDots) clearTimeout(els.vizMemoryDots.__evictTimeout);
   if (els.vizRtVad) els.vizRtVad.classList.remove('viz-block-active');
   if (els.vizSelection) els.vizSelection.classList.remove('viz-block-active');
   if (els.vizSelectionDot) {
@@ -813,7 +937,7 @@ function resetConcealerViz() {
   }
   if (els.vizCandidates) clearTimeout(els.vizCandidates.__pulseTimeout);
   renderDots(els.vizCandidates, emptyCandidateDots(lastKnownCandidateSlots)); // slots stay visible even when idle/stopped - see module init above
-  renderDots(els.vizMemoryDots, emptyMemoryDots(lastKnownMemorySlots));
+  renderDots(els.vizMemoryDots, [...emptyMemoryDots(lastKnownMemorySlots), ...reservedMemoryDots(lastKnownCandidateSlots)]);
   if (els.vizMemoryCount) els.vizMemoryCount.textContent = '';
 }
 
