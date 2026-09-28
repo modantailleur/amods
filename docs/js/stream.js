@@ -52,6 +52,14 @@ export class ConcealerStream {
     const voiceActivity = await this.sourceVad.predict(x); // forecast === x (identity forecaster)
     this.lastVoiceActivity = voiceActivity;
     let voiceName = '';
+    // updateMemory runs every chunk regardless of voice activity - not just
+    // while getConcealer's own voice-active branch runs - so that once a
+    // pending-speech window has started (see GranSpeechMask.update), it can
+    // still complete and fire while you've gone quiet again, rather than
+    // only being checked on the next chunk that happens to have voice in it
+    // (see granspeechmask.js's pendingSpeechActive/pendingSpeechSamples for
+    // why this JS port deliberately diverges from upstream amods here).
+    await this.concealer.updateMemory(x);
     if (voiceActivity) {
       const { audio: concealerAudio, voiceName: vn } = await this.concealer.getConcealer(x);
       voiceName = vn;

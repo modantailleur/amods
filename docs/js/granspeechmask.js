@@ -53,7 +53,29 @@ export class GranSpeechMask {
     this.stopProcessing = false;
     this.curConcealing = false;
     this.concealingCountdown = 0;
-    this.newVoiceSinceFeed = 0;
+    // JS-port-only divergence from upstream amods (see the .py's own
+    // new_voice_since_feed, which instead requires pendingVoiceMaxDuration
+    // worth of CUMULATIVE voice-active audio - possibly spread across
+    // arbitrarily long silent gaps - before ever feeding memory). That
+    // design lets pendingVoice (a plain rolling last-N-seconds window) drift
+    // out of sync with what the counter is actually counting: audio spoken
+    // long enough ago can scroll out of pendingVoice before the cumulative
+    // total finally crosses the threshold, so the clips that actually get
+    // fed may contain none of the speech that triggered the feed.
+    //
+    // Instead: the moment source VAD detects voice after being idle, a
+    // pending-speech window starts and always completes exactly
+    // pendingVoiceMaxDuration later, counting every sample from then on
+    // (voice or silence - see update()/refresh()) rather than only
+    // voice-active ones. Since that's the same duration pendingVoice itself
+    // spans, the fed clip is guaranteed to actually contain the voice that
+    // started the window. It also bounds worst-case denoiser load to "at
+    // most once per pendingVoiceMaxDuration of audio that contains any
+    // speech at all", rather than running arbitrarily rarely (as above) or,
+    // if instead triggered unconditionally on a timer, arbitrarily often
+    // across long stretches of pure silence/noise.
+    this.pendingSpeechActive = false;
+    this.pendingSpeechSamples = 0;
 
     // Debug-visualization only (see docs/debug.html and debugSnapshot()
     // below) - which memory index getConcealer most recently chose, and
@@ -112,12 +134,17 @@ export class GranSpeechMask {
     };
   }
 
-  /** While speech is active: extend the pending-voice window with x and count down any active concealing cooldown. */
+  /** While speech is active: extend the pending-voice window with x, start (or keep advancing) the pending-speech window, and count down any active concealing cooldown. */
   update(x) {
     for (let i = 0; i < x.length; i++) this.pendingVoice.push(x[i]);
     const maxLen = Math.trunc(this.pendingVoiceMaxDuration * this.sr);
     if (this.pendingVoice.length > maxLen) this.pendingVoice.splice(0, this.pendingVoice.length - maxLen);
-    this.newVoiceSinceFeed += x.length;
+
+    if (!this.pendingSpeechActive) {
+      this.pendingSpeechActive = true; // voice just started after being idle - the fixed window begins now
+      this.pendingSpeechSamples = 0;
+    }
+    this.pendingSpeechSamples += x.length;
 
     if (this.curConcealing) {
       this.concealingCountdown -= x.length;
@@ -128,22 +155,30 @@ export class GranSpeechMask {
     }
   }
 
-  /** During silence: keep extending the pending-voice window with x, but drop any in-progress concealing state. */
+  /** During silence: keep extending the pending-voice window with x, keep advancing an already-started pending-speech window, but drop any in-progress concealing state. */
   refresh(x) {
     for (let i = 0; i < x.length; i++) this.pendingVoice.push(x[i]);
     const maxLen = Math.trunc(this.pendingVoiceMaxDuration * this.sr);
     if (this.pendingVoice.length > maxLen) this.pendingVoice.splice(0, this.pendingVoice.length - maxLen);
+    // Once a pending-speech window has started, silence doesn't pause or
+    // cancel it - it keeps counting toward the fixed pendingVoiceMaxDuration
+    // deadline exactly like a voice-active chunk would (see updateMemory).
+    if (this.pendingSpeechActive) this.pendingSpeechSamples += x.length;
     this.curConcealing = false;
     this.concealingCountdown = 0;
   }
 
   /**
    * Age existing memory entries' cooldowns every concealer_duration worth
-   * of audio, and, once enough fresh pending voice has accumulated, feed
-   * it into memory. In streaming mode this is fire-and-forget (like
-   * Python's daemon background thread - the caller doesn't wait for it to
-   * finish); otherwise it's awaited, matching Python's synchronous
-   * (non-streaming) call to _background_task.
+   * of audio, and, once a pending-speech window (started by update(), see
+   * its comment) has run for a full pendingVoiceMaxDuration, feed the
+   * current pendingVoice snapshot into memory. In streaming mode this is
+   * fire-and-forget (like Python's daemon background thread - the caller
+   * doesn't wait for it to finish); otherwise it's awaited, matching
+   * Python's synchronous (non-streaming) call to _background_task. Must be
+   * called every chunk regardless of voice activity (see stream.js) - a
+   * window that started on a voice-active chunk still needs to be checked
+   * (and can still complete/fire) on the silent chunks that follow it.
    */
   async updateMemory(x) {
     this.curSizeBeforeUpdateMemory += x.length;
@@ -155,8 +190,8 @@ export class GranSpeechMask {
     if (this.freezeLearning) return;
     const maxLen = Math.trunc(this.pendingVoiceMaxDuration * this.sr);
     const pendingVoiceFull = this.pendingVoice.length >= maxLen;
-    const hasFreshMaterial = !this.isStream || this.newVoiceSinceFeed >= maxLen;
-    if (!this.stopProcessing && pendingVoiceFull && hasFreshMaterial) {
+    const pendingSpeechWindowComplete = this.pendingSpeechActive && this.pendingSpeechSamples >= maxLen;
+    if (!this.stopProcessing && pendingVoiceFull && pendingSpeechWindowComplete) {
       this.stopProcessing = true;
       const snapshot = Float32Array.from(this.pendingVoice);
       if (this.isStream) {
@@ -244,21 +279,23 @@ export class GranSpeechMask {
 
       if (!this.isStream) this.pendingVoice = [];
     } finally {
-      this.newVoiceSinceFeed = 0;
+      this.pendingSpeechActive = false;
+      this.pendingSpeechSamples = 0;
       this.stopProcessing = false;
     }
   }
 
   /**
-   * Grow the memory with x, then, if not already mid-concealment and the
-   * memory is large enough, pick the clip whose features best match the
-   * recent live buffer (cosine distance, falling back to a random eligible
-   * clip if none are eligible), put it on cooldown, and return it energy-
-   * normalized to match the live buffer. Otherwise returns null (silence).
-   * Returns { audio: Float32Array|null, voiceName: string }.
+   * Extend pendingVoice/the pending-speech window with x (updateMemory - the
+   * check that can actually trigger a memory feed from that window - is now
+   * the caller's job, run unconditionally every chunk; see stream.js), then,
+   * if not already mid-concealment and the memory is large enough, pick the
+   * clip whose features best match the recent live buffer (cosine distance,
+   * falling back to a random eligible clip if none are eligible), put it on
+   * cooldown, and return it energy-normalized to match the live buffer.
+   * Otherwise returns null (silence). Returns { audio: Float32Array|null, voiceName: string }.
    */
   async getConcealer(x) {
-    await this.updateMemory(x);
     this.update(x); // extends pendingVoice with x, so it's included below
 
     const shouldConceal = !this.curConcealing && this.memory.length >= this.minMemoryToConceal;

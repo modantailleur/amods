@@ -833,7 +833,17 @@ function updateConcealerViz(debug) {
     // "-" and "0" aren't the same glyph width in a proportional font, so
     // matching character COUNT alone (this padStart) isn't sufficient on
     // its own, only necessary.
-    const secs = debug.msSinceDenoiseStart != null
+    //
+    // Gated on denoiseRunning, not just msSinceDenoiseStart != null -
+    // granspeechmask.js's lastDenoiseStartedAt is only ever set when a call
+    // starts, never cleared when it ends, so msSinceDenoiseStart alone would
+    // just keep counting up forever after the very first denoise call ever
+    // runs (idle time between cycles included) instead of showing "this
+    // call's elapsed time, or nothing". Checking denoiseRunning here - the
+    // same flag the status dot above already keys off - keeps the number
+    // and the dot lighting up/reverting in lockstep: numbers only appear
+    // for as long as a denoise call is actually in flight.
+    const secs = debug.denoiseRunning && debug.msSinceDenoiseStart != null
       ? (debug.msSinceDenoiseStart / 1000).toFixed(1).padStart(4, '0')
       : '--.-';
     els.vizDenoiseSecs.textContent = secs;
