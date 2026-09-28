@@ -19,6 +19,8 @@ body {
   body { background: #16171a; color: #e9e9ec; }
   .panel, .status-panel { background: #202226 !important; border-color: #33353a !important; }
   select, input[type="range"] { background: #2a2c31; color: inherit; }
+  .viz-status-dot { background: #40434a; }
+  .viz-dot-neutral { background: #40434a; }
 }
 
 h1 {
@@ -272,5 +274,132 @@ select {
     justify-self: end;
     margin-top: 2px;
   }
+}
+
+/* Concealer visualization (docs/debug.html only) - purely illustrative,
+   updated from worker-engine.js's periodic debug snapshot (see main.js's
+   updateConcealerViz). */
+.viz-branch {
+  margin-block: 12px;
+}
+
+.viz-branch h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 0 0 6px 0;
+}
+
+.viz-branch-note {
+  font-weight: normal;
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.viz-flow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-block: 6px;
+}
+
+/* The memory branch's row (denoise -> VAD -> candidates) has the most
+   content of any row - keep it on one line rather than letting the
+   candidates dots drop to a second line under narrow/cramped conditions.
+   Relies on "Noise red. (-.-s)" (not the longer "Noise reduction (...)")
+   actually fitting - see main.js's fixed-width placeholder for why the
+   label's width never changes once real data arrives either. */
+.viz-flow-nowrap {
+  flex-wrap: nowrap;
+}
+
+.viz-flow-label {
+  font-size: 0.75rem;
+  color: #6b7280;
+  flex: none;
+}
+
+/* Deliberately NOT button-shaped (no border, no fill, no rounded box) -
+   these are status indicators, not controls, and shouldn't invite a click
+   the way a bordered/filled rectangle in the same blue as #start-stop-btn
+   would. A small "status light" dot next to plain text reads as read-only
+   at a glance, the way an online/offline indicator does. */
+.viz-block {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.viz-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #cbd0d8;
+  flex: none;
+  transition: background 150ms linear, box-shadow 150ms linear;
+}
+
+/* Dark grey, not the app's usual blue (#2f6fed) - "this block is active"
+   needs to read as visually distinct from "this memory slot is selected"
+   (viz-dot-blue), especially right next to Concealer selection's own
+   dedicated blue dot (see #viz-selection-dot). */
+.viz-block-active .viz-status-dot {
+  background: #333333;
+  box-shadow: 0 0 4px rgba(51, 51, 51, 0.7);
+}
+
+.viz-arrow {
+  color: #9aa1ab;
+  flex: none;
+}
+
+.viz-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 10px;
+}
+
+.viz-dots-wrap {
+  padding: 8px;
+  border: 1px solid #dcdfe4;
+  border-radius: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.viz-dot {
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box; /* so viz-dot-empty's border doesn't make it render larger than the others */
+  border-radius: 50%;
+  flex: none;
+  background: #cbd0d8; /* fallback - always overridden by one of the modifiers below */
+}
+
+.viz-dot-neutral { background: #cbd0d8; }
+.viz-dot-green { background: #2e8b57; }
+.viz-dot-red { background: #cc3333; }
+.viz-dot-blue { background: #2f6fed; }
+.viz-dot-orange { background: #d98c00; }
+/* Candidate slots only, never the memory queue's gray "available" dots -
+   an empty candidate slot (no VAD verdict yet) is plain white with a thin
+   outline, not gray, so it's visually distinct from "available" memory. */
+.viz-dot-empty { background: #fff; border: 1px solid #cbd0d8; }
+
+.viz-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-top: 10px;
+}
+
+.viz-legend .viz-dot {
+  margin-right: -6px;
 }
 

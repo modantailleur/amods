@@ -54,6 +54,24 @@ export class GranSpeechMask {
     this.curConcealing = false;
     this.concealingCountdown = 0;
     this.newVoiceSinceFeed = 0;
+
+    // Debug-visualization only (see docs/debug.html and debugSnapshot()
+    // below) - which memory index getConcealer most recently chose, and
+    // the pass/fail VAD verdict for each candidate clip _feedMemory's last
+    // cycle produced (not just the ones that made it into memory - the
+    // rejected ones matter for the visualization too).
+    this.lastSelectedIndex = null;
+    this.lastFeedCandidates = [];
+    this.denoiseRunning = false;
+    this.lastDenoiseStartedAt = null; // a performance.now() timestamp local to this worker - never sent across the worker boundary as-is, see debugSnapshot()
+    // memVadSeq starts at 0 ("no cycle has run yet") and increments once per
+    // completed cycle - lets main.js's display tell "a new cycle just
+    // finished" apart from "still the same cycle as last poll" without
+    // relying on array-reference equality across the postMessage boundary.
+    // Purely a display counter, read nowhere else in this file.
+    this.memVadSeq = 0;
+    this.lastMemVadDurationMs = 0;
+    this.feedCycleSeq = 0; // same idea, but incremented when a cycle STARTS rather than when it finishes - see debugSnapshot()
   }
 
   status() {
@@ -63,6 +81,34 @@ export class GranSpeechMask {
       target: this.memoryMaxlen,
       threshold: this.minMemoryToConceal,
       label: 'Memory',
+    };
+  }
+
+  /**
+   * Debug-visualization only (see docs/debug.html) - a snapshot of internal
+   * state that status() deliberately doesn't expose (it's UI-facing, this
+   * is purely for the concealer diagram). Not used for anything the
+   * concealer itself depends on.
+   */
+  debugSnapshot() {
+    const lengthCondition = Math.max(0, this.memory.length - this.maxConcealerDistanceToBuffer);
+    return {
+      memory: this.memory.map((entry, i) => ({
+        cooldown: entry.cooldown,
+        tooCloseToBuffer: i >= lengthCondition,
+      })),
+      memoryMaxlen: this.memoryMaxlen,
+      selectedIndex: this.curConcealing ? this.lastSelectedIndex : null,
+      lastCandidates: this.lastFeedCandidates,
+      denoiseRunning: this.denoiseRunning,
+      // A plain duration (computed here, in this worker's own clock),
+      // never a raw timestamp - performance.now() time origins aren't
+      // comparable across the worker/main-thread boundary.
+      msSinceDenoiseStart: this.lastDenoiseStartedAt != null ? performance.now() - this.lastDenoiseStartedAt : null,
+      memVadSeq: this.memVadSeq,
+      memVadDurationMs: this.lastMemVadDurationMs,
+      feedCycleSeq: this.feedCycleSeq,
+      candidateSlots: this.nConcealerBeforeDenoise, // fixed constant, known before any cycle actually runs
     };
   }
 
@@ -136,16 +182,23 @@ export class GranSpeechMask {
     // now that the denoiser call crosses a Worker boundary (see
     // denoiser-proxy.js) and so has real, independent failure modes that
     // didn't exist when it ran in-process.
+    this.feedCycleSeq += 1; // debug-visualization only - see debugSnapshot()
     try {
       const newMemory = [];
       let denoised = y;
       if (this.denoise && this.denoiser) {
-        denoised = await this.denoiser.predict(y);
-        if (denoised.length > y.length) denoised = denoised.subarray(0, y.length);
-        else if (denoised.length < y.length) {
-          const padded = new Float32Array(y.length);
-          padded.set(denoised);
-          denoised = padded;
+        this.denoiseRunning = true; // debug-visualization only - see debugSnapshot()
+        this.lastDenoiseStartedAt = performance.now();
+        try {
+          denoised = await this.denoiser.predict(y);
+          if (denoised.length > y.length) denoised = denoised.subarray(0, y.length);
+          else if (denoised.length < y.length) {
+            const padded = new Float32Array(y.length);
+            padded.set(denoised);
+            denoised = padded;
+          }
+        } finally {
+          this.denoiseRunning = false;
         }
       }
 
@@ -156,6 +209,8 @@ export class GranSpeechMask {
       const remainder = y.length % n;
       const fadeSize = Math.max(Math.trunc(this.sr * this.fadeDuration), Math.trunc(this.sr / 100)); // min 10ms
 
+      const candidateResults = [];
+      const memVadStartedAt = performance.now(); // debug-visualization only - see debugSnapshot()
       let start = 0;
       for (let i = 0; i < n; i++) {
         const size = base + (i < remainder ? 1 : 0);
@@ -169,11 +224,17 @@ export class GranSpeechMask {
         // two different audio domains.
         const feat = featureExtractor(clipOriginal, this.sr, { norm: true });
         // eslint-disable-next-line no-await-in-loop
-        if (await this.vad.predict(clip)) {
+        const passed = await this.vad.predict(clip);
+        candidateResults.push(passed);
+        if (passed) {
           newMemory.push({ clip: Float32Array.from(clip), feat, cooldown: 0, voiceName });
         }
         start = end;
       }
+      // debug-visualization only, all three - see debugSnapshot()
+      this.lastFeedCandidates = candidateResults;
+      this.lastMemVadDurationMs = performance.now() - memVadStartedAt;
+      this.memVadSeq += 1;
 
       while (this.memory.length < this.memoryMaxlen && newMemory.length > 0) {
         this.memory.push(newMemory.shift());
@@ -242,6 +303,7 @@ export class GranSpeechMask {
 
     const chosen = this.memory[bestIdx];
     chosen.cooldown = this.maxCountdownReuse;
+    this.lastSelectedIndex = bestIdx; // debug-visualization only - see debugSnapshot()
 
     // Normalize energy to match the live buffer.
     let liveMeanSq = 0;

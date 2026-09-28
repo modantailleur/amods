@@ -31,9 +31,11 @@ let concealer = null;
 let sourceVad = null;
 let remoteDenoiser = null;
 let sr = 48000;
+let debugTelemetry = false; // set from cfg.debugTelemetry - see docs/debug.html; gates the extra debugSnapshot() work in startStatusLoop below so plain index.html never pays for it
 
 async function init(cfg) {
   sr = cfg.sr;
+  debugTelemetry = Boolean(cfg.debugTelemetry);
   const vadSession = await ort.InferenceSession.create('../models/silero_vad.onnx');
 
   sourceVad = new SileroVAD(vadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr });
@@ -77,7 +79,10 @@ function startStatusLoop() {
     if (!concealer || !stream) return;
     const status = concealer.status();
     const timing = stream.popCallbackTiming();
-    postMessage({ type: 'status', status, timing });
+    const debug = debugTelemetry
+      ? { voiceActive: stream.lastVoiceActivity, ...concealer.debugSnapshot() }
+      : undefined;
+    postMessage({ type: 'status', status, timing, debug });
   }, 500);
 }
 

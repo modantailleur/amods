@@ -78,6 +78,49 @@
     <p id="status" class="status-text">Idle — press Start to begin</p>
   </section>
 
+  <!-- Debug-only concealer visualization. main.js only updates this when
+       window.DEBUG_MODE is true (see above) - inert markup otherwise. -->
+  <section class="panel" id="concealer-viz-panel">
+    <h2>Concealer visualization</h2>
+
+    <div class="viz-branch">
+      <h3>Concealing branch <span class="viz-branch-note">(real time)</span></h3>
+      <div class="viz-flow">
+        <div class="viz-block" id="viz-rt-vad"><span class="viz-status-dot"></span><span>Voice Activity</span></div>
+        <div class="viz-arrow">→</div>
+        <div class="viz-block" id="viz-selection">
+          <span class="viz-status-dot"></span><span>Concealer selection</span>
+          <span class="viz-dot viz-dot-empty" id="viz-selection-dot"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="viz-branch">
+      <h3>Memory branch <span class="viz-branch-note">(background)</span></h3>
+      <div class="viz-flow viz-flow-nowrap">
+        <div class="viz-block" id="viz-denoise"><span class="viz-status-dot"></span><span id="viz-denoise-label">Noise reduction (-.-s)</span></div>
+        <div class="viz-arrow">→</div>
+        <div class="viz-block" id="viz-mem-vad"><span class="viz-status-dot"></span><span>Voice Activity</span></div>
+        <div class="viz-arrow">→</div>
+        <div class="viz-dots" id="viz-candidates"></div>
+      </div>
+    </div>
+
+    <div class="viz-branch">
+      <h3>Memory queue <span id="viz-memory-count" class="viz-branch-note"></span></h3>
+      <div class="viz-dots viz-dots-wrap" id="viz-memory-dots"></div>
+    </div>
+
+    <p class="viz-legend">
+      <span class="viz-dot viz-dot-blue"></span> selected
+      <span class="viz-dot viz-dot-orange"></span> on hold
+      <span class="viz-dot viz-dot-green"></span> passed
+      <span class="viz-dot viz-dot-red"></span> failed
+      <span class="viz-dot viz-dot-neutral"></span> available
+      <span class="viz-dot viz-dot-empty"></span> empty slot
+    </p>
+  </section>
+
   <!-- Debug-only controls. main.js only wires these up when window.DEBUG_MODE
        is true (see above) - harmless/inert markup otherwise. -->
   <section class="panel" id="debug-panel">

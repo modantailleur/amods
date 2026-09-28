@@ -53,6 +53,15 @@ const els = {
   latency: document.getElementById('latency'),
   debugBtn: document.getElementById('debug-btn'),
   debugStatus: document.getElementById('debug-status'),
+  vizRtVad: document.getElementById('viz-rt-vad'),
+  vizSelection: document.getElementById('viz-selection'),
+  vizSelectionDot: document.getElementById('viz-selection-dot'),
+  vizDenoise: document.getElementById('viz-denoise'),
+  vizDenoiseLabel: document.getElementById('viz-denoise-label'),
+  vizMemVad: document.getElementById('viz-mem-vad'),
+  vizCandidates: document.getElementById('viz-candidates'),
+  vizMemoryDots: document.getElementById('viz-memory-dots'),
+  vizMemoryCount: document.getElementById('viz-memory-count'),
 };
 
 let audioContext = null; // the real session's AudioContext (Start/Stop)
@@ -406,6 +415,7 @@ async function start({ debugFilePath = null } = {}) {
     } else if (msg.type === 'status') {
       latestTiming = msg.timing;
       updateStatus(msg.status, msg.timing);
+      if (DEBUG_MODE && msg.debug) updateConcealerViz(msg.debug);
     } else if (msg.type === 'error') {
       els.status.textContent = `Engine error: ${msg.message}`;
     } else if (msg.type === 'ready') {
@@ -458,6 +468,7 @@ async function start({ debugFilePath = null } = {}) {
       concealerMemoryThreshold: rateToThreshold(els.concealerMemoryRate.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
       monitorGain: 0.0,
+      debugTelemetry: DEBUG_MODE,
     },
   });
 
@@ -542,6 +553,7 @@ function stop() {
   els.inLevelFill.style.width = '0%';
   els.outLevelFill.style.width = '0%';
   if (els.debugStatus) els.debugStatus.textContent = '';
+  resetConcealerViz();
   setControlsEnabled(true);
   updateStartStopUI();
   startInputPreview();
@@ -619,6 +631,190 @@ function updateStatus(status, timing) {
   els.latency.textContent =
     `~${totalMs.toFixed(0)} ms  (in ${inMs.toFixed(0)} ms + out ${outMs.toFixed(0)} ms + algo ` +
     `${timing.avgMs.toFixed(1)}/${timing.maxMs.toFixed(1)} ms avg/max)`;
+}
+
+// ── Concealer visualization (DEBUG_MODE only) ──────────────────────────────
+// Purely illustrative - reflects worker-engine.js's periodic debugSnapshot()
+// (see granspeechmask.js/stream.js), never drives any actual behavior. The
+// underlying computation (memVadSeq/memVadDurationMs) is untouched by any
+// of this - these constants and timeouts only control how long the display
+// keeps something visible, not how long anything actually takes.
+const MEM_VAD_MIN_PULSE_MS = 400; // the memory branch's own VAD step is usually much faster than the 500ms poll interval - without a floor here it would almost never visibly appear at all
+const CANDIDATES_DISPLAY_MS = 800; // how long a candidate slot stays colored before reverting to its empty look, not how long the slot itself exists (it always exists)
+// nConcealerBeforeDenoise's current value (ceil(pendingVoiceMaxDuration /
+// concealer_duration) = ceil(2/0.3), both fixed in worker-engine.js's
+// concealerConfig) - shown before any real telemetry exists so the row is
+// never empty, corrected from debug.candidateSlots once a cycle actually
+// reports it (in case those constants ever change).
+const CANDIDATE_SLOTS_DEFAULT = 7;
+// memory_maxlen's current value (worker-engine.js's concealerConfig) - same
+// "shown by default, corrected once real telemetry exists" reasoning as
+// CANDIDATE_SLOTS_DEFAULT above.
+const MEMORY_SLOTS_DEFAULT = 100;
+let lastSeenMemVadSeq = 0; // 0 means "no cycle observed yet" - matches GranSpeechMask's own starting value, so the very first status poll after Start never fires a spurious pulse
+let lastSeenFeedCycleSeq = 0;
+let lastKnownCandidateSlots = CANDIDATE_SLOTS_DEFAULT;
+let lastKnownMemorySlots = MEMORY_SLOTS_DEFAULT;
+// How many of the memory queue's most-recently-added entries to force green
+// (mirroring the candidates row's own green) until greenFlashUntil - set
+// together whenever a cycle adds anything, read on every render below.
+let memoryFlashCount = 0;
+let memoryFlashUntil = 0;
+
+function renderDots(container, dotSpecs) {
+  if (!container) return;
+  container.innerHTML = dotSpecs
+    .map(({ cls, title }) => `<span class="viz-dot ${cls}" title="${title || ''}"></span>`)
+    .join('');
+}
+
+function emptyCandidateDots(count) {
+  return Array.from({ length: count }, () => ({ cls: 'viz-dot-empty', title: 'empty slot' }));
+}
+
+function emptyMemoryDots(count) {
+  return Array.from({ length: count }, () => ({ cls: 'viz-dot-empty', title: 'empty slot' }));
+}
+
+// Adds the active class right away, then removes it after durationMs -
+// restarting the timer if called again before the previous one fired, so
+// back-to-back pulses don't cut each other's display time short.
+function pulseActive(el, durationMs) {
+  if (!el) return;
+  el.classList.add('viz-block-active');
+  clearTimeout(el.__pulseTimeout);
+  el.__pulseTimeout = setTimeout(() => el.classList.remove('viz-block-active'), durationMs);
+}
+
+// Like pulseActive, but for a row of dots: shows dotSpecs immediately, then
+// reverts to idleSpecs after durationMs - "reverts to", not "clears to
+// nothing", so the slots themselves are always present (see
+// CANDIDATE_SLOTS_DEFAULT above) and only their fill ever changes.
+function pulseDots(container, dotSpecs, durationMs, idleSpecs) {
+  if (!container) return;
+  renderDots(container, dotSpecs);
+  clearTimeout(container.__pulseTimeout);
+  container.__pulseTimeout = setTimeout(() => renderDots(container, idleSpecs), durationMs);
+}
+
+// Both rows are "there by default", even before Start is ever pressed -
+// not tied to any worker message.
+if (DEBUG_MODE && els.vizCandidates) renderDots(els.vizCandidates, emptyCandidateDots(lastKnownCandidateSlots));
+if (DEBUG_MODE && els.vizMemoryDots) renderDots(els.vizMemoryDots, emptyMemoryDots(lastKnownMemorySlots));
+
+function updateConcealerViz(debug) {
+  if (els.vizRtVad) els.vizRtVad.classList.toggle('viz-block-active', Boolean(debug.voiceActive));
+
+  // The block's own status dot (purple, like every other block) says "the
+  // concealing branch is active"; the separate blue dot after the label
+  // specifically says "and a memory entry is currently selected" - same
+  // color and same timing (both driven by this one `concealing` value) as
+  // that entry's own blue dot in the memory queue below, to visually tie
+  // the two together.
+  const concealing = debug.selectedIndex != null;
+  if (els.vizSelection) els.vizSelection.classList.toggle('viz-block-active', concealing);
+  if (els.vizSelectionDot) {
+    els.vizSelectionDot.className = `viz-dot ${concealing ? 'viz-dot-blue' : 'viz-dot-empty'}`;
+    els.vizSelectionDot.title = concealing ? `memory index #${debug.selectedIndex} is selected` : 'no clip currently selected';
+  }
+
+  if (els.vizDenoise) els.vizDenoise.classList.toggle('viz-block-active', Boolean(debug.denoiseRunning));
+  if (els.vizDenoiseLabel) {
+    // Always show the parenthesized part, even as a placeholder ("-.-s") -
+    // switching between "Noise reduction" and "Noise reduction (Xs)" would
+    // change the label's width and shift everything after it in the row.
+    const secs = debug.msSinceDenoiseStart != null ? (debug.msSinceDenoiseStart / 1000).toFixed(1) : '-.-';
+    els.vizDenoiseLabel.textContent = `Noise reduction (${secs}s)`;
+  }
+
+  // A new feed cycle starting is when we first know how many candidates
+  // there will be (candidateSlots is a fixed constant, not counted after
+  // the fact). The slots themselves are already visible by default (see
+  // module init above) - this just makes sure they're back to empty/white
+  // right as a new cycle begins, in case stale colors from a previous
+  // cycle's display window are still showing.
+  if (debug.feedCycleSeq != null && debug.feedCycleSeq > lastSeenFeedCycleSeq) {
+    lastSeenFeedCycleSeq = debug.feedCycleSeq;
+    lastKnownCandidateSlots = debug.candidateSlots || lastKnownCandidateSlots;
+    if (els.vizCandidates) clearTimeout(els.vizCandidates.__pulseTimeout);
+    renderDots(els.vizCandidates, emptyCandidateDots(lastKnownCandidateSlots));
+  }
+
+  // Unlike denoising (which genuinely takes long enough to poll mid-flight),
+  // the memory branch's VAD step is over almost instantly - polling for
+  // "is it running right now" would essentially never catch it. Instead,
+  // memVadSeq incrementing at all tells us a cycle just completed, and we
+  // pulse the indicator + candidates for a floor duration regardless of how
+  // fast the real step was.
+  if (debug.memVadSeq != null && debug.memVadSeq > lastSeenMemVadSeq) {
+    lastSeenMemVadSeq = debug.memVadSeq;
+    const candidates = debug.lastCandidates || [];
+    pulseActive(els.vizMemVad, Math.max(debug.memVadDurationMs || 0, MEM_VAD_MIN_PULSE_MS));
+    pulseDots(
+      els.vizCandidates,
+      candidates.map((passed) => ({
+        cls: passed ? 'viz-dot-green' : 'viz-dot-red',
+        title: passed ? 'passed - added to memory' : 'failed - discarded',
+      })),
+      CANDIDATES_DISPLAY_MS,
+      emptyCandidateDots(candidates.length || lastKnownCandidateSlots)
+    );
+
+    // Candidates that passed VAD get pushed onto the end of memory (see
+    // GranSpeechMask._feedMemory's merge step - new entries are always
+    // appended, and any trimming to stay within memory_maxlen only ever
+    // removes from the front) - so the last N = (passed count) entries are
+    // exactly this cycle's newly-added ones. Flash them green too, for the
+    // same duration as the candidates row, so it reads as "these candidates
+    // became these memory entries" rather than two unrelated color changes.
+    const addedCount = candidates.filter(Boolean).length;
+    if (addedCount > 0) {
+      memoryFlashCount = addedCount;
+      memoryFlashUntil = Date.now() + CANDIDATES_DISPLAY_MS;
+    }
+  }
+
+  const memory = debug.memory || [];
+  lastKnownMemorySlots = debug.memoryMaxlen || lastKnownMemorySlots;
+  const flashing = Date.now() < memoryFlashUntil;
+  const flashFromIndex = memory.length - memoryFlashCount;
+  renderDots(
+    els.vizMemoryDots,
+    Array.from({ length: lastKnownMemorySlots }, (_, i) => {
+      if (i >= memory.length) return { cls: 'viz-dot-empty', title: 'empty memory slot' };
+      if (flashing && i >= flashFromIndex) return { cls: 'viz-dot-green', title: 'just added to memory' };
+      const entry = memory[i];
+      if (i === debug.selectedIndex) return { cls: 'viz-dot-blue', title: 'currently selected' };
+      if (entry.cooldown > 0) return { cls: 'viz-dot-orange', title: `on hold - reused ${entry.cooldown} cycles ago` };
+      if (entry.tooCloseToBuffer) return { cls: 'viz-dot-orange', title: 'on hold - too close to the live buffer' };
+      return { cls: 'viz-dot-neutral', title: 'available' };
+    })
+  );
+  if (els.vizMemoryCount) els.vizMemoryCount.textContent = `${memory.length} / ${debug.memoryMaxlen ?? '—'}`;
+}
+
+function resetConcealerViz() {
+  if (!DEBUG_MODE) return;
+  lastSeenMemVadSeq = 0; // so a fresh session's first real cycle pulses again, rather than being mistaken for a repeat of the last session's
+  lastSeenFeedCycleSeq = 0;
+  memoryFlashCount = 0;
+  memoryFlashUntil = 0;
+  if (els.vizRtVad) els.vizRtVad.classList.remove('viz-block-active');
+  if (els.vizSelection) els.vizSelection.classList.remove('viz-block-active');
+  if (els.vizSelectionDot) {
+    els.vizSelectionDot.className = 'viz-dot viz-dot-empty';
+    els.vizSelectionDot.title = 'no clip currently selected';
+  }
+  if (els.vizDenoise) els.vizDenoise.classList.remove('viz-block-active');
+  if (els.vizDenoiseLabel) els.vizDenoiseLabel.textContent = 'Noise reduction (-.-s)';
+  if (els.vizMemVad) {
+    els.vizMemVad.classList.remove('viz-block-active');
+    clearTimeout(els.vizMemVad.__pulseTimeout);
+  }
+  if (els.vizCandidates) clearTimeout(els.vizCandidates.__pulseTimeout);
+  renderDots(els.vizCandidates, emptyCandidateDots(lastKnownCandidateSlots)); // slots stay visible even when idle/stopped - see module init above
+  renderDots(els.vizMemoryDots, emptyMemoryDots(lastKnownMemorySlots));
+  if (els.vizMemoryCount) els.vizMemoryCount.textContent = '';
 }
 
 // ── Event wiring ──────────────────────────────────────────────────────────

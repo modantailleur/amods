@@ -23,6 +23,11 @@ export class ConcealerStream {
     this._callbackMsSum = 0;
     this._callbackMsMax = 0;
     this._callbackMsCount = 0;
+
+    // Debug-visualization only (see docs/debug.html) - the concealing
+    // branch's most recent real-time VAD decision, for display alongside
+    // the memory branch's own VAD. Harmless to always maintain (one bool).
+    this.lastVoiceActivity = false;
   }
 
   resetState() {
@@ -45,6 +50,7 @@ export class ConcealerStream {
     const frames = x.length;
 
     const voiceActivity = await this.sourceVad.predict(x); // forecast === x (identity forecaster)
+    this.lastVoiceActivity = voiceActivity;
     let voiceName = '';
     if (voiceActivity) {
       const { audio: concealerAudio, voiceName: vn } = await this.concealer.getConcealer(x);
