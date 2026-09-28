@@ -87,6 +87,19 @@ function rateToThreshold(rateStr) {
   return Math.round((1.0 - parseFloat(rateStr)) * 10) / 10;
 }
 
+// "Concealing purity" is the concealer's own memory-branch VAD threshold,
+// and unlike "Concealing likelihood" (where a higher slider value should
+// make the VAD MORE readily call something speech, hence rateToThreshold's
+// 1-rate inversion), a higher purity value is meant to mean "stricter/more
+// conservative about what gets stored" - which for vad-silero.js's
+// speechRatio > threshold pass rule means a HIGHER threshold, not a lower
+// one. So this maps the slider value straight to the threshold, no
+// inversion (see the "concealing purity" investigation in conversation
+// history for why the inherited 1-rate mapping was wrong for this slider).
+function purityToThreshold(rateStr) {
+  return Math.round(parseFloat(rateStr) * 10) / 10;
+}
+
 function dbToMultiplier(dbStr) {
   return Math.pow(10, parseFloat(dbStr) / 20);
 }
@@ -465,7 +478,7 @@ async function start({ debugFilePath = null } = {}) {
       sr,
       denoiserEnabled: Boolean(denoiserPath),
       concealingThreshold: rateToThreshold(els.concealingRate.value),
-      concealerMemoryThreshold: rateToThreshold(els.concealerMemoryRate.value),
+      concealerMemoryThreshold: purityToThreshold(els.concealerMemoryRate.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
       monitorGain: 0.0,
       debugTelemetry: DEBUG_MODE,
@@ -995,7 +1008,7 @@ els.concealingRate.addEventListener('input', () => {
 });
 
 els.concealerMemoryRate.addEventListener('input', () => {
-  const threshold = rateToThreshold(els.concealerMemoryRate.value);
+  const threshold = purityToThreshold(els.concealerMemoryRate.value);
   els.concealerMemoryRateValue.textContent = els.concealerMemoryRate.value;
   if (worker && running) worker.postMessage({ type: 'setConcealerMemoryThreshold', value: threshold });
 });
