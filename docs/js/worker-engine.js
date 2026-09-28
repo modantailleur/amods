@@ -24,13 +24,16 @@ import { SileroVAD } from './vad-silero.js';
 import { GranSpeechMask } from './granspeechmask.js';
 import { ConcealerStream } from './stream.js';
 import { RemoteDenoiser } from './denoiser-proxy.js';
+import { applyFadeIn } from './audio-utils.js';
 
 let stream = null;
 let concealer = null;
 let sourceVad = null;
 let remoteDenoiser = null;
+let sr = 48000;
 
 async function init(cfg) {
+  sr = cfg.sr;
   const vadSession = await ort.InferenceSession.create('../models/silero_vad.onnx');
 
   sourceVad = new SileroVAD(vadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr });
@@ -78,17 +81,73 @@ function startStatusLoop() {
   }, 500);
 }
 
+// On a slow device (weak mobile CPU, a background-tab GC pause, or just the
+// concealer's own memory-refresh cycle briefly adding VAD calls on this
+// same thread - see granspeechmask.js's _feedMemory clip loop), occasionally
+// exceeding the 50ms per-chunk budget is a transient hiccup. Two very
+// different things depend on every chunk being processed in order with no
+// gaps: real-time playback (which also has a latency budget - stale audio
+// played back late is worse than briefly skipping it) and GranSpeechMask's
+// pendingVoice/memory recording (which has NO latency budget - it can run
+// behind without the user noticing, but a genuine temporal gap in it gets
+// baked permanently into a stored memory clip, replayed every time that
+// clip is later selected - not just heard once, so it must never happen,
+// full stop, no matter how overloaded the device is).
+//
+// So every chunk always goes through stream.processChunk() in full,
+// eventually, in order, with nothing skipped - that's what makes
+// pendingVoice's recording genuinely gap-free rather than just gap-free-
+// with-the-edit-points-faded-over (which was this file's previous
+// approach, and doesn't actually restore the missing audio, just its
+// amplitude continuity). The ONLY thing that gets sacrificed under real
+// overload is whether a given chunk's result is still worth sending to the
+// speaker once computed - see MAX_STALE_MS below.
 let processing = false;
+const pendingQueue = [];
+// Purely a safety valve against unbounded memory growth if a device is so
+// overloaded it can never catch up (each item is ~9.6KB, so even this many
+// queued is only ~2MB) - NOT a latency bound (see MAX_STALE_MS for that).
+// Should never actually trigger in practice; if it does, the device
+// genuinely cannot keep up in real time and something has to give.
+const MAX_QUEUE = 200;
+// A chunk's playMix is still computed - and its effect on pendingVoice/
+// concealer state already took effect - regardless of staleness; this only
+// decides whether it's still worth sending to the speaker. Older than this
+// and playing it back would feel more like a confusing delayed echo than
+// real-time conversation, so it's skipped instead.
+const MAX_STALE_MS = 150;
+let hadSkip = false;
+const FADE_AFTER_SKIP_S = 0.01; // smooths the deliberate join back to fresh audio after a stale run was skipped - an intentional real-time trade-off, not a fix for lost data
+
 async function handleChunk(chunk) {
-  if (!stream || processing) return; // drop this chunk rather than queue up and fall behind
+  if (!stream) return;
+  if (pendingQueue.length >= MAX_QUEUE) pendingQueue.shift();
+  pendingQueue.push({ chunk, arrivedAt: performance.now() });
+  drainQueue();
+}
+
+async function drainQueue() {
+  if (processing) return;
+  const item = pendingQueue.shift();
+  if (!item) return;
   processing = true;
   try {
-    const { playMix } = await stream.processChunk(chunk);
-    postMessage({ type: 'play', playMix }, [playMix.buffer]);
+    let { playMix } = await stream.processChunk(item.chunk);
+    const staleMs = performance.now() - item.arrivedAt;
+    if (staleMs <= MAX_STALE_MS) {
+      if (hadSkip) {
+        playMix = applyFadeIn(playMix, Math.round(FADE_AFTER_SKIP_S * sr));
+        hadSkip = false;
+      }
+      postMessage({ type: 'play', playMix }, [playMix.buffer]);
+    } else {
+      hadSkip = true; // too stale to play, but pendingVoice/concealer state above already saw it in full - memory continuity is never affected by this
+    }
   } catch (e) {
     console.error('worker-engine processChunk failed:', e);
   } finally {
     processing = false;
+    drainQueue();
   }
 }
 
