@@ -11,16 +11,14 @@
 // it looks in the JS source. RemoteDenoiser instead hands that call off to
 // docs/js/denoiser-worker.js, a second dedicated Worker, via the main
 // thread relay - see main.js's start().
-import * as ort from '../vendor/ort.min.mjs';
-
-globalThis.ort = ort;
-// Single-threaded WASM: works on plain GitHub Pages, no cross-origin-
-// isolation (COOP/COEP) headers required - at some performance cost vs.
-// multi-threaded WASM, which needs SharedArrayBuffer and those headers.
-ort.env.wasm.numThreads = 1;
-ort.env.wasm.wasmPaths = '../vendor/';
-
-import { SileroVAD } from './vad-silero.js';
+//
+// Only TenVAD is a static top-level import - it's the default/recommended
+// backend and its own WASM module is tiny (~283KB). onnxruntime-web and
+// SileroVAD are dynamically imported instead, ONLY when the "VAD" dropdown
+// (see index.html/debug.html, above "Concealing likelihood") is set to
+// Silero, so choosing TEN VAD never pays to load onnxruntime-web or the
+// ~1.3MB silero_vad.onnx model at all.
+import { TenVAD } from './vad-ten.js';
 import { GranSpeechMask } from './granspeechmask.js';
 import { ConcealerStream } from './stream.js';
 import { RemoteDenoiser } from './denoiser-proxy.js';
@@ -41,23 +39,37 @@ async function init(cfg) {
   // main.js's own installDebugLogRelay('main') call never sees anything
   // logged in here - see debug-log.js for why both realms need their own.
   if (debugTelemetry) installDebugLogRelay('worker');
-  // Two SEPARATE sessions (same model file, loaded twice), NOT one shared
-  // between sourceVad and concealerVad - the two are called from genuinely
+
+  // Two SEPARATE VAD instances, NEVER sharing one underlying model
+  // session/module - sourceVad and concealerVad are called from genuinely
   // independent, interleavable call chains (sourceVad every ~50ms from the
   // real-time chunk loop; concealerVad in a burst from _feedMemory, which
-  // runs fire-and-forget alongside that same loop - see updateMemory), and
-  // sharing one InferenceSession's internal execution buffers/state across
-  // two logically-unrelated streams of calls is not a safe pattern for a
-  // stateful model. Confirmed the hard way: sourceVad detected speech
-  // correctly right up until the very first time concealerVad ever ran, then
-  // never detected anything again for the rest of the session, however long
-  // silence followed - a single shared session getting corrupted the first
-  // time both were in play at once explains that exactly.
-  const sourceVadSession = await ort.InferenceSession.create('../models/silero_vad.onnx');
-  const concealerVadSession = await ort.InferenceSession.create('../models/silero_vad.onnx');
-
-  sourceVad = new SileroVAD(sourceVadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr, name: 'source', debug: debugTelemetry });
-  const concealerVad = new SileroVAD(concealerVadSession, { logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr, name: 'concealer', debug: debugTelemetry });
+  // runs fire-and-forget alongside that same loop - see updateMemory).
+  // Sharing one onnxruntime-web InferenceSession between them once silently
+  // corrupted sourceVad the first time concealerVad ever ran - not worth
+  // risking again for either backend.
+  let concealerVad;
+  if (cfg.vadType === 'silero') {
+    const [{ default: ort }, { SileroVAD }] = await Promise.all([
+      import('../vendor/ort.min.mjs'),
+      import('./vad-silero.js'),
+    ]);
+    globalThis.ort = ort;
+    // Single-threaded WASM: works on plain GitHub Pages, no cross-origin-
+    // isolation (COOP/COEP) headers required - at some performance cost vs.
+    // multi-threaded WASM, which needs SharedArrayBuffer and those headers.
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.wasmPaths = '../vendor/';
+    const [sourceVadSession, concealerVadSession] = await Promise.all([
+      ort.InferenceSession.create('../models/silero_vad.onnx'),
+      ort.InferenceSession.create('../models/silero_vad.onnx'),
+    ]);
+    sourceVad = new SileroVAD(sourceVadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr, name: 'source', debug: debugTelemetry });
+    concealerVad = new SileroVAD(concealerVadSession, { logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr, name: 'concealer', debug: debugTelemetry });
+  } else {
+    sourceVad = new TenVAD({ logitThreshold: cfg.concealingThreshold, sr: cfg.sr, name: 'source', debug: debugTelemetry });
+    concealerVad = new TenVAD({ logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr, name: 'concealer', debug: debugTelemetry });
+  }
   remoteDenoiser = cfg.denoiserEnabled ? new RemoteDenoiser() : null;
 
   const concealerConfig = {

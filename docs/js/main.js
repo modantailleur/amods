@@ -47,6 +47,7 @@ const els = {
   pingBtn: document.getElementById('ping-btn'),
   feedbackWarning: document.getElementById('feedback-warning'),
   outputSinkWarning: document.getElementById('output-sink-warning'),
+  vadTypeSelect: document.getElementById('vad-type-select'),
   concealingRate: document.getElementById('concealing-rate'),
   concealingRateValue: document.getElementById('concealing-rate-value'),
   concealerMemoryRate: document.getElementById('concealer-memory-rate'),
@@ -326,7 +327,7 @@ async function populateDevices() {
 // hardcoding the filename is what's needed for this to stay in sync
 // automatically whenever that mapping changes (this list previously drifted
 // out of sync with it, silently preloading the wrong model file).
-const MODEL_URLS = ['./models/silero_vad.onnx', DENOISER_MODEL_PATHS.int8.replace(/^\.\.\//, './')];
+const MODEL_URLS = ['./vendor/ten-vad/ten_vad.wasm', DENOISER_MODEL_PATHS.int8.replace(/^\.\.\//, './')];
 
 async function preloadModels() {
   const totalPerFile = new Array(MODEL_URLS.length).fill(0);
@@ -488,6 +489,7 @@ async function ensureEngine() {
     type: 'init',
     config: {
       sr,
+      vadType: els.vadTypeSelect.value, // 'ten' (default) or 'silero' - see worker-engine.js's init()
       denoiserEnabled: Boolean(denoiserPath),
       concealingThreshold: rateToThreshold(els.concealingRate.value),
       concealerMemoryThreshold: purityToThreshold(els.concealerMemoryRate.value),
@@ -837,6 +839,7 @@ function setControlsEnabled(enabled) {
   els.micSelect.disabled = !enabled;
   els.speakerSelect.disabled = !enabled;
   els.denoiserSelect.disabled = !enabled;
+  els.vadTypeSelect.disabled = !enabled; // same reasoning as denoiserSelect - the backend is fixed for a session's lifetime, no live-switching mid-session
   els.pingBtn.disabled = !enabled;
   // Concealing rate, concealer memory rate, and concealer level stay
   // enabled while running - they're live-adjustable (see the worker
