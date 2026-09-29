@@ -500,11 +500,15 @@ async function ensureEngine() {
       // toggling it produce no audible change until this was fixed.
       monitorGain: 1.0,
       debugTelemetry: DEBUG_MODE,
-      // Toggles only exist in debug.html's DOM - index.html keeps the
-      // original always-concealer-only-on-speaker behavior these defaults
-      // (false/true) already matched before either toggle existed.
-      listenOriginal: els.listenOriginalToggle?.checked ?? false,
-      listenConcealer: els.listenConcealerToggle?.checked ?? true,
+      // Always the safe production default here, regardless of what the
+      // debug toggles currently show - this engine is shared by BOTH mic and
+      // debug sessions (see connectSource()), and ensureEngine() runs once,
+      // before we even know which source is about to connect. connectSource
+      // itself sends the real, source-aware setListenOriginal/
+      // setListenConcealer values immediately after this, for whichever
+      // source actually ends up connected first.
+      listenOriginal: false,
+      listenConcealer: true,
     },
   });
 
@@ -606,6 +610,26 @@ async function connectSource(newSource) {
 
   activeSource = newSource;
   debugMode = newSource === 'debug'; // kept in sync for any other code still reading it
+
+  // The "Original audio"/"Concealer track" toggles only exist in
+  // debug.html's DOM and are meant to apply ONLY to debug replay - the mic
+  // path must always sound exactly like production, regardless of whatever
+  // those checkboxes currently show (they're debug.html-only controls with
+  // no equivalent/visibility on index.html, so there'd be no way to even
+  // notice or fix an unwanted mic-path change if this weren't enforced).
+  // Explicitly re-asserting the right value HERE, on every source switch,
+  // is what makes that true rather than merely "true until you touch a
+  // checkbox while mic is active" - see the toggles' own change listeners,
+  // which mirror this same reasoning for the live-adjustment case.
+  if (worker) {
+    if (newSource === 'debug') {
+      worker.postMessage({ type: 'setListenOriginal', value: els.listenOriginalToggle?.checked ?? false });
+      worker.postMessage({ type: 'setListenConcealer', value: els.listenConcealerToggle?.checked ?? true });
+    } else {
+      worker.postMessage({ type: 'setListenOriginal', value: false });
+      worker.postMessage({ type: 'setListenConcealer', value: true });
+    }
+  }
 }
 
 // Entry point for both transport rows' Play button. From idle, this is a
@@ -1294,13 +1318,21 @@ els.concLevel.addEventListener('input', () => {
 
 if (DEBUG_MODE && els.listenOriginalToggle) {
   els.listenOriginalToggle.addEventListener('change', () => {
-    if (worker && running) worker.postMessage({ type: 'setListenOriginal', value: els.listenOriginalToggle.checked });
+    // Only live-applies while debug replay is the ACTIVE source - toggling
+    // this while mic is active would otherwise leak into the mic path (see
+    // connectSource's matching reasoning); it'll simply take effect next
+    // time debug becomes active instead.
+    if (worker && running && activeSource === 'debug') {
+      worker.postMessage({ type: 'setListenOriginal', value: els.listenOriginalToggle.checked });
+    }
   });
 }
 
 if (DEBUG_MODE && els.listenConcealerToggle) {
   els.listenConcealerToggle.addEventListener('change', () => {
-    if (worker && running) worker.postMessage({ type: 'setListenConcealer', value: els.listenConcealerToggle.checked });
+    if (worker && running && activeSource === 'debug') {
+      worker.postMessage({ type: 'setListenConcealer', value: els.listenConcealerToggle.checked });
+    }
   });
 }
 
