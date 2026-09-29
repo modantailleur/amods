@@ -64,12 +64,15 @@
 
   <p id="loading-message" class="status-text">Loading models…</p>
   <div id="loading-progress" class="progress-bar"><div id="loading-progress-fill" class="progress-fill"></div></div>
-  <button id="start-stop-btn" disabled>Start</button>
+  <div class="transport-row">
+    <button id="start-stop-btn" disabled title="Start" aria-label="Start">▶</button>
+    <button id="stop-btn" disabled title="Stop" aria-label="Stop">⏹</button>
+  </div>
 
   <section class="status-panel">
     <div class="row"><span>Progress:</span><span id="progress">—</span></div>
     <div class="row"><span>Latency:</span><span id="latency">—</span></div>
-    <p id="status" class="status-text">Idle — press Start to begin</p>
+    <p id="status" class="status-text">Idle — press ▶ to begin</p>
   </section>
 
   <script type="module" src="js/main.js"></script>

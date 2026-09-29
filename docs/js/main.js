@@ -31,6 +31,7 @@ const LEVEL_METER_DB_MAX = -5.0;
 
 const els = {
   startStopBtn: document.getElementById('start-stop-btn'),
+  stopBtn: document.getElementById('stop-btn'),
   micSelect: document.getElementById('mic-select'),
   speakerSelect: document.getElementById('speaker-select'),
   inLevelFill: document.getElementById('in-level-fill'),
@@ -69,7 +70,8 @@ let sourceNode = null;
 let workletNode = null;
 let worker = null;
 let denoiserWorker = null; // separate Worker/thread for denoiser inference - see denoiser-proxy.js for why it can't share worker-engine.js's thread
-let running = false;
+let running = false; // a session (mic or debug replay) exists - true whether it's actively playing OR paused; only stop() clears it
+let paused = false; // the existing session's AudioContext is suspended (see pause()/resume()) - the worker/concealer/memory queue stay fully alive and untouched, only real-time chunk delivery halts
 let debugMode = false; // true while the current session's input is DEBUG_AUDIO_PATH instead of the mic
 let debugElapsedTimer = null;
 
@@ -357,7 +359,7 @@ async function preloadModels() {
     els.loadingMessage.hidden = true;
     els.loadingProgress.hidden = true;
   } catch (e) {
-    els.loadingMessage.textContent = `Could not preload models: ${e.message}. You can still press Start to load them then.`;
+    els.loadingMessage.textContent = `Could not preload models: ${e.message}. You can still press ▶ to load them then.`;
     els.loadingProgress.hidden = true;
   } finally {
     els.startStopBtn.disabled = false;
@@ -377,6 +379,7 @@ async function preloadModels() {
 // past them.
 async function start({ debugFilePath = null } = {}) {
   els.startStopBtn.disabled = true;
+  els.stopBtn.disabled = true;
   if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = true;
   els.status.textContent = debugFilePath ? 'Starting debug replay…' : 'Starting…';
 
@@ -426,8 +429,17 @@ async function start({ debugFilePath = null } = {}) {
       workletNode.port.postMessage({ type: 'play', playMix: msg.playMix }, [msg.playMix.buffer]);
     } else if (msg.type === 'status') {
       latestTiming = msg.timing;
-      updateStatus(msg.status, msg.timing);
-      if (DEBUG_MODE && msg.debug) updateConcealerViz(msg.debug);
+      // The worker's own status loop keeps ticking every 500ms regardless of
+      // pause() (it's a separate thread, unaffected by the main-thread
+      // AudioContext being suspended) - skip applying it to the UI while
+      // paused so "Paused" isn't immediately overwritten back to "Running".
+      // Nothing is actually changing underneath during a pause anyway (no
+      // new chunks are reaching the worker), so there's nothing lost by not
+      // re-rendering it.
+      if (!paused) {
+        updateStatus(msg.status, msg.timing);
+        if (DEBUG_MODE && msg.debug) updateConcealerViz(msg.debug);
+      }
     } else if (msg.type === 'error') {
       els.status.textContent = `Engine error: ${msg.message}`;
     } else if (msg.type === 'ready') {
@@ -499,6 +511,7 @@ async function start({ debugFilePath = null } = {}) {
   }
 
   running = true;
+  paused = false;
 
   if (debugFilePath) {
     debugSourceNode.start();
@@ -521,6 +534,7 @@ async function start({ debugFilePath = null } = {}) {
 
 function stop() {
   els.startStopBtn.disabled = true;
+  els.stopBtn.disabled = true;
   if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = true;
   if (debugElapsedTimer) {
     clearInterval(debugElapsedTimer);
@@ -560,8 +574,9 @@ function stop() {
     audioContext = null;
   }
   running = false;
+  paused = false;
   debugMode = false;
-  els.status.textContent = 'Idle — press Start to begin';
+  els.status.textContent = 'Idle — press ▶ to begin';
   els.progress.textContent = '—';
   els.latency.textContent = '—';
   els.inLevelFill.style.width = '0%';
@@ -573,28 +588,65 @@ function stop() {
   startInputPreview();
 }
 
-// Keeps the two start buttons (and debug.html's third) from ever both
-// looking "startable" or both "stoppable" at once - exactly one session
-// (mic or debug) can run at a time, and whichever button started it is the
-// only one that can stop it.
+// Pause/resume suspend or resume the EXISTING session's AudioContext -
+// unlike stop(), the worker, its GranSpeechMask concealer, and everything in
+// its memory queue stay fully alive and untouched throughout. Suspending an
+// AudioContext halts every node's processing (the worklet's process() calls
+// stop firing, so no more 'chunk' messages reach the worker - see
+// worklet-processor.js), including a debug-mode AudioBufferSourceNode's
+// playback position, which freezes and resumes exactly where it left off -
+// there's no native pause() on that node type, so suspending the whole
+// context is the standard way to achieve it. The mic stream itself (if any)
+// stays open throughout, so resuming needs no new getUserMedia permission
+// prompt and no re-creating the worker/concealer from scratch.
+function pause() {
+  if (!running || paused || !audioContext) return;
+  audioContext.suspend();
+  paused = true;
+  els.status.textContent = 'Paused';
+  updateStartStopUI();
+}
+
+function resume() {
+  if (!running || !paused || !audioContext) return;
+  audioContext.resume();
+  paused = false;
+  updateStartStopUI();
+}
+
+// startStopBtn is now a Play/Pause toggle and stopBtn a dedicated Stop,
+// together controlling whichever session (mic or debug replay) is currently
+// active - only one can exist at a time, so the debug button's remaining job
+// is just starting a brand new debug session from idle (see debug.html's own
+// click handler below); it stays disabled for as long as any session, mic or
+// debug, is already running.
 function updateStartStopUI() {
   if (!running) {
-    els.startStopBtn.textContent = 'Start';
+    els.startStopBtn.textContent = '▶';
+    els.startStopBtn.title = 'Start';
+    els.startStopBtn.setAttribute('aria-label', 'Start');
     els.startStopBtn.disabled = false;
+    els.stopBtn.disabled = true;
     if (DEBUG_MODE && els.debugBtn) {
       els.debugBtn.textContent = 'Start debugging';
       els.debugBtn.disabled = false;
     }
-  } else if (debugMode) {
-    els.startStopBtn.disabled = true;
-    if (DEBUG_MODE && els.debugBtn) {
-      els.debugBtn.textContent = 'Stop debug';
-      els.debugBtn.disabled = false;
-    }
   } else {
-    els.startStopBtn.textContent = 'Stop';
     els.startStopBtn.disabled = false;
-    if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = true;
+    els.stopBtn.disabled = false;
+    if (paused) {
+      els.startStopBtn.textContent = '▶';
+      els.startStopBtn.title = 'Resume';
+      els.startStopBtn.setAttribute('aria-label', 'Resume');
+    } else {
+      els.startStopBtn.textContent = '⏸';
+      els.startStopBtn.title = 'Pause';
+      els.startStopBtn.setAttribute('aria-label', 'Pause');
+    }
+    if (DEBUG_MODE && els.debugBtn) {
+      els.debugBtn.textContent = debugMode ? 'Debug replay running…' : 'Start debugging';
+      els.debugBtn.disabled = true;
+    }
   }
 }
 
@@ -846,13 +898,23 @@ if (DEBUG_MODE && els.vizMemoryDots) {
 // (clicked from the memory queue above) directly to the speakers, bypassing
 // the whole real-time worklet/mixing pipeline entirely - this is just a
 // one-shot preview, not something that should touch pendingConc/recording.
+// A dedicated context, separate from the real session's audioContext (same
+// idea as previewContext for the idle mic-level meter/Ping below) - reusing
+// audioContext directly would mean a click while paused silently produces no
+// sound, since a suspended AudioContext doesn't render ANY node's output,
+// including a freshly started one. This one is never suspended by pause(),
+// so clicking a memory dot plays it regardless of whether the main session
+// is running, paused, or (once memory has any entries) even stopped.
+let debugPlaybackContext = null;
+
 function playDebugMemoryClip(clip, clipSr) {
-  if (!audioContext) return;
-  const buffer = audioContext.createBuffer(1, clip.length, clipSr);
+  if (!debugPlaybackContext) debugPlaybackContext = new AudioContext();
+  if (debugPlaybackContext.state === 'suspended') debugPlaybackContext.resume();
+  const buffer = debugPlaybackContext.createBuffer(1, clip.length, clipSr);
   buffer.copyToChannel(clip, 0);
-  const src = audioContext.createBufferSource();
+  const src = debugPlaybackContext.createBufferSource();
   src.buffer = buffer;
-  src.connect(audioContext.destination);
+  src.connect(debugPlaybackContext.destination);
   src.start();
 }
 
@@ -990,17 +1052,29 @@ function resetConcealerViz() {
 
 // ── Event wiring ──────────────────────────────────────────────────────────
 els.startStopBtn.addEventListener('click', () => {
+  if (!running) {
+    start().catch((e) => {
+      els.status.textContent = `Failed to start: ${e.message}`;
+      updateStartStopUI();
+    });
+  } else if (paused) {
+    resume();
+  } else {
+    pause();
+  }
+});
+
+els.stopBtn.addEventListener('click', () => {
   if (running) stop();
-  else start().catch((e) => {
-    els.status.textContent = `Failed to start: ${e.message}`;
-    updateStartStopUI();
-  });
 });
 
 if (DEBUG_MODE && els.debugBtn) {
+  // Only ever reachable while idle - updateStartStopUI() disables this
+  // button for as long as any session (mic or debug) is already running, so
+  // stopping/pausing a debug replay in progress goes through the shared
+  // Play/Pause/Stop buttons above instead of this one.
   els.debugBtn.addEventListener('click', () => {
-    if (running) stop();
-    else start({ debugFilePath: DEBUG_AUDIO_PATH }).catch((e) => {
+    start({ debugFilePath: DEBUG_AUDIO_PATH }).catch((e) => {
       els.status.textContent = `Failed to start debug replay: ${e.message}`;
       debugMode = false;
       updateStartStopUI();
