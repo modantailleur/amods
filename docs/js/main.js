@@ -16,7 +16,7 @@ import { installDebugLogRelay } from './debug-log.js';
 // every debug-only feature below so the production page never wires any of
 // it up - on index.html, #debug-start-stop-btn etc. simply don't exist in the DOM.
 const DEBUG_MODE = window.DEBUG_MODE === true;
-const DEBUG_AUDIO_PATH = './audios/ah.wav';
+const DEBUG_AUDIO_PATH = './audios/test.wav';
 
 // Streams every console.log/warn/error from here on to a local terminal tool
 // (run `node scripts/debug-log-server.mjs`) instead of requiring DevTools +
@@ -960,7 +960,12 @@ function classifyMemoryEntry(entry, i, debug) {
   // dropped from the concealer's real memory array by the time we see them,
   // so there's no live index left to request playback for.
   const index = i >= 0 ? i : undefined;
-  if (i === debug?.selectedIndex) return { cls: 'viz-dot-blue', title: 'currently selected - click to play', index };
+  // An entry can be actively selected more than once at a time - see
+  // granspeechmask.js's activeSelections comment: concealingCountdown can
+  // expire before a clip's own audio has finished draining out of
+  // pendingConc, letting a new selection genuinely overlap a still-playing
+  // one in the real output mix, not just replace it.
+  if (debug?.selectedIndices?.includes(i)) return { cls: 'viz-dot-blue', title: 'currently selected - click to play', index };
   if (entry.cooldown > 0) return { cls: 'viz-dot-orange', title: `on hold - reused ${entry.cooldown} cycles ago - click to play`, index };
   if (entry.tooCloseToBuffer) return { cls: 'viz-dot-orange', title: 'on hold - too close to the live buffer - click to play', index };
   return { cls: 'viz-dot-neutral', title: 'available - click to play', index };
@@ -1096,11 +1101,14 @@ function updateConcealerViz(debug) {
   // color and same timing (both driven by this one `concealing` value) as
   // that entry's own blue dot in the memory queue below, to visually tie
   // the two together.
-  const concealing = debug.selectedIndex != null;
+  const selectedIndices = debug.selectedIndices || [];
+  const concealing = selectedIndices.length > 0;
   if (els.vizSelection) els.vizSelection.classList.toggle('viz-block-active', concealing);
   if (els.vizSelectionDot) {
     els.vizSelectionDot.className = `viz-dot ${concealing ? 'viz-dot-blue' : 'viz-dot-empty'}`;
-    els.vizSelectionDot.title = concealing ? `memory index #${debug.selectedIndex} is selected` : 'no clip currently selected';
+    els.vizSelectionDot.title = concealing
+      ? `memory index #${selectedIndices.join(', #')} ${selectedIndices.length > 1 ? 'are' : 'is'} selected`
+      : 'no clip currently selected';
   }
 
   // The denoise pass is fast enough in practice that a live elapsed-time

@@ -95,11 +95,23 @@ export class GranSpeechMask {
     this.freshOnsetSamples = 0;
 
     // Debug-visualization only (see docs/debug.html and debugSnapshot()
-    // below) - which memory index getConcealer most recently chose, and
-    // the pass/fail VAD verdict for each candidate clip _feedMemory's last
-    // cycle produced (not just the ones that made it into memory - the
-    // rejected ones matter for the visualization too).
-    this.lastSelectedIndex = null;
+    // below) - every memory entry whose audio is still actively draining out
+    // of pendingConc right now, as { index, remaining (samples) } - NOT just
+    // the single most recently selected one. concealingCountdown (the real
+    // gate on when a NEW selection is allowed - see getConcealer/update
+    // above) can expire before a clip's own full concealer_duration has
+    // finished playing out of pendingConc (it's set to somewhere between
+    // concealingMinTimeoutRatio and concealingMaxTimeoutRatio of the clip's
+    // length, so it can be as little as 60% of it) - meaning a second clip
+    // can genuinely start overlapping the first in the actual output mix.
+    // Tracking only "the last selected index" would silently drop the
+    // earlier one from the display the moment the second is chosen, even
+    // though both are still audibly summed together in pendingConc.
+    this.activeSelections = [];
+    // Also debug-visualization only, and the pass/fail VAD verdict for each
+    // candidate clip _feedMemory's last cycle produced (not just the ones
+    // that made it into memory - the rejected ones matter for the
+    // visualization too).
     this.lastFeedCandidates = [];
     this.denoiseRunning = false;
     // memVadSeq starts at 0 ("no cycle has run yet") and increments once per
@@ -136,7 +148,7 @@ export class GranSpeechMask {
         tooCloseToBuffer: i >= lengthCondition,
       })),
       memoryMaxlen: this.memoryMaxlen,
-      selectedIndex: this.curConcealing ? this.lastSelectedIndex : null,
+      selectedIndices: this.activeSelections.map((sel) => sel.index),
       lastCandidates: this.lastFeedCandidates,
       denoiseRunning: this.denoiseRunning,
       memVadSeq: this.memVadSeq,
@@ -206,6 +218,13 @@ export class GranSpeechMask {
    * (and can still complete/fire) on the silent chunks that follow it.
    */
   async updateMemory(x) {
+    // Debug-visualization only - kept in sync with pendingConc's own
+    // unconditional per-chunk drain in stream.js's processChunk (every
+    // chunk, regardless of voice activity or freezeLearning below), which is
+    // why this sits before that early return rather than after it.
+    for (const sel of this.activeSelections) sel.remaining -= x.length;
+    this.activeSelections = this.activeSelections.filter((sel) => sel.remaining > 0);
+
     this.curSizeBeforeUpdateMemory += x.length;
     if (this.curSizeBeforeUpdateMemory >= this.concealerSize) {
       for (const entry of this.memory) entry.cooldown = Math.max(0, entry.cooldown - 1);
@@ -390,7 +409,6 @@ export class GranSpeechMask {
 
     const chosen = this.memory[bestIdx];
     chosen.cooldown = this.maxCountdownReuse;
-    this.lastSelectedIndex = bestIdx; // debug-visualization only - see debugSnapshot()
 
     // Normalize energy to match the live buffer.
     let liveMeanSq = 0;
@@ -402,6 +420,14 @@ export class GranSpeechMask {
     const energyScale = Math.sqrt(liveMeanSq) / Math.sqrt(clipMeanSq);
     const concealer = new Float32Array(chosen.clip.length);
     for (let i = 0; i < concealer.length; i++) concealer[i] = chosen.clip[i] * energyScale;
+
+    // Debug-visualization only - see activeSelections' own comment above for
+    // why this tracks every still-playing selection, not just this one.
+    // remaining starts at the clip's own full length (how long its audio
+    // will actually take to drain out of pendingConc), which is NOT the
+    // same as concealingCountdown below (the real gate on the NEXT
+    // selection, which can fire sooner than that).
+    this.activeSelections.push({ index: bestIdx, remaining: concealer.length });
 
     const minTimeout = Math.trunc(concealer.length * this.concealingMinTimeoutRatio);
     const maxTimeout = Math.trunc(concealer.length * this.concealingMaxTimeoutRatio);
