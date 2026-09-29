@@ -29,17 +29,11 @@ export class ConcealerStream {
     // Debug-visualization only (see docs/debug.html) - the concealing
     // branch's most recent real-time VAD decision, for display alongside
     // the memory branch's own VAD. Harmless to always maintain (one bool).
+    // Sent to the main thread on its own dedicated per-chunk message (see
+    // worker-engine.js's drainQueue) rather than via the ~500ms status
+    // poll, specifically so the on-screen dot reacts at the same ~50ms
+    // cadence real detection happens at, not in up-to-500ms-late steps.
     this.lastVoiceActivity = false;
-    // Also debug-visualization only, but tracking something different:
-    // lastVoiceActivity is a single chunk's verdict (~50ms), while the
-    // status loop that reads it only polls every ~500ms (see
-    // worker-engine.js's startStatusLoop) - a brief blip of speech shorter
-    // than that gap could easily flip true then false again between two
-    // polls and never be sampled at all. This instead OR's every chunk's
-    // verdict since the last poll, so "was there ANY voice activity in the
-    // last ~500ms" is what gets reported, not just "was the single most
-    // recent chunk voice-active" - see popVoiceActiveSincePoll().
-    this.voiceActiveSincePoll = false;
   }
 
   resetState() {
@@ -72,7 +66,6 @@ export class ConcealerStream {
 
     const voiceActivity = await this.sourceVad.predict(x); // forecast === x (identity forecaster)
     this.lastVoiceActivity = voiceActivity;
-    if (voiceActivity) this.voiceActiveSincePoll = true;
     let voiceName = '';
     // updateMemory runs every chunk regardless of voice activity - not just
     // while getConcealer's own voice-active branch runs - so that once a
@@ -154,12 +147,5 @@ export class ConcealerStream {
     this._callbackMsMax = 0;
     this._callbackMsCount = 0;
     return { avgMs: avg, maxMs: max };
-  }
-
-  /** Debug-visualization only - pop (read then reset) whether any chunk was voice-active since the last call. See voiceActiveSincePoll's own comment for why this exists instead of just reading lastVoiceActivity. */
-  popVoiceActiveSincePoll() {
-    const v = this.voiceActiveSincePoll;
-    this.voiceActiveSincePoll = false;
-    return v;
   }
 }

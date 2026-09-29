@@ -16,7 +16,7 @@ import { installDebugLogRelay } from './debug-log.js';
 // every debug-only feature below so the production page never wires any of
 // it up - on index.html, #debug-start-stop-btn etc. simply don't exist in the DOM.
 const DEBUG_MODE = window.DEBUG_MODE === true;
-const DEBUG_AUDIO_PATH = './audios/test.wav';
+const DEBUG_AUDIO_PATH = './audios/ah.wav';
 
 // Streams every console.log/warn/error from here on to a local terminal tool
 // (run `node scripts/debug-log-server.mjs`) instead of requiring DevTools +
@@ -444,6 +444,13 @@ async function ensureEngine() {
       else worker.postMessage({ type: 'denoiseError', id: msg.id, message: 'denoiser worker not available' });
     } else if (msg.type === 'debugMemoryClip' && DEBUG_MODE) {
       playDebugMemoryClip(msg.clip, msg.sr);
+    } else if (msg.type === 'rtVad' && DEBUG_MODE) {
+      // Sent every chunk (~50ms), not on the ~500ms status-poll cadence
+      // everything else in updateConcealerViz runs on - see worker-engine.js's
+      // drainQueue. Updated directly here (not gated on `paused` the way
+      // updateStatus/updateConcealerViz are) since drainQueue itself simply
+      // doesn't run while paused, so this naturally freezes on its own.
+      if (els.vizRtVad) els.vizRtVad.classList.toggle('viz-block-active', Boolean(msg.voiceActive));
     }
   };
   workletNode.port.onmessage = (event) => {
@@ -1078,7 +1085,10 @@ function playDebugMemoryClip(clip, clipSr) {
 }
 
 function updateConcealerViz(debug) {
-  if (els.vizRtVad) els.vizRtVad.classList.toggle('viz-block-active', Boolean(debug.voiceActive));
+  // vizRtVad is NOT updated here anymore - it now reacts live to the
+  // worker's own dedicated per-chunk 'rtVad' message (see worker.onmessage
+  // above) instead of this ~500ms poll, so it visibly lights up/off at
+  // real detection speed (~50ms) rather than in up-to-500ms-late steps.
 
   // The block's own status dot (purple, like every other block) says "the
   // concealing branch is active"; the separate blue dot after the label

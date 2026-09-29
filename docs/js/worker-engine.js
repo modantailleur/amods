@@ -110,9 +110,10 @@ function startStatusLoop() {
     }
     const status = concealer.status();
     const timing = stream.popCallbackTiming();
-    const debug = debugTelemetry
-      ? { voiceActive: stream.popVoiceActiveSincePoll(), ...concealer.debugSnapshot() }
-      : undefined;
+    // voiceActive is NOT included here anymore - see drainQueue's dedicated
+    // per-chunk 'rtVad' message below, which is what the dot actually reacts
+    // to now (~50ms cadence instead of this 500ms poll).
+    const debug = debugTelemetry ? concealer.debugSnapshot() : undefined;
     postMessage({ type: 'status', status, timing, debug });
   }, 500);
 }
@@ -169,6 +170,12 @@ async function drainQueue() {
   processing = true;
   try {
     let { playMix } = await stream.processChunk(item.chunk);
+    // Debug-visualization only - sent every chunk (~50ms), unconditionally
+    // (not gated on staleMs below - that only decides whether THIS chunk's
+    // audio is still worth playing, not whether the dot's state is still
+    // worth showing), so the on-screen dot reacts at real detection speed
+    // instead of only refreshing once per ~500ms status poll.
+    if (debugTelemetry) postMessage({ type: 'rtVad', voiceActive: stream.lastVoiceActivity });
     const staleMs = performance.now() - item.arrivedAt;
     if (staleMs <= MAX_STALE_MS) {
       if (hadSkip) {
