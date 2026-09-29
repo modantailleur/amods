@@ -613,7 +613,7 @@ async function connectSource(newSource) {
   activeSource = newSource;
   debugMode = newSource === 'debug'; // kept in sync for any other code still reading it
 
-  // The "Original audio"/"Concealer track" toggles only exist in
+  // The "Source track"/"Concealer track" playback toggles only exist in
   // debug.html's DOM and are meant to apply ONLY to debug replay - the mic
   // path must always sound exactly like production, regardless of whatever
   // those checkboxes currently show (they're debug.html-only controls with

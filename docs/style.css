@@ -62,6 +62,17 @@ h1 {
   min-width: 100px;
 }
 
+/* Small hover-only hint marking a control as playback-only (e.g. the debug
+   replay's Source/Concealer track toggles) - deliberately just an icon with
+   a title tooltip rather than visible text, so the row stays compact and the
+   explanation is there for whoever wants it without cluttering the UI for
+   everyone else. */
+.playback-hint {
+  cursor: help;
+  font-size: 1rem;
+  opacity: 0.7;
+}
+
 .value {
   font-weight: 600;
   min-width: 3em;
