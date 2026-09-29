@@ -13,7 +13,7 @@ import { DENOISER_MODEL_PATHS } from './denoiser-models.js';
 
 // Set by debug.html (never by index.html) before this module loads. Gates
 // every debug-only feature below so the production page never wires any of
-// it up - on index.html, #debug-btn etc. simply don't exist in the DOM.
+// it up - on index.html, #debug-start-stop-btn etc. simply don't exist in the DOM.
 const DEBUG_MODE = window.DEBUG_MODE === true;
 const DEBUG_AUDIO_PATH = './audios/test.wav';
 
@@ -52,8 +52,11 @@ const els = {
   status: document.getElementById('status'),
   progress: document.getElementById('progress'),
   latency: document.getElementById('latency'),
-  debugBtn: document.getElementById('debug-btn'),
+  debugStartStopBtn: document.getElementById('debug-start-stop-btn'),
+  debugStopBtn: document.getElementById('debug-stop-btn'),
   debugStatus: document.getElementById('debug-status'),
+  debugProgress: document.getElementById('debug-progress'),
+  debugProgressFill: document.getElementById('debug-progress-fill'),
   vizRtVad: document.getElementById('viz-rt-vad'),
   vizSelection: document.getElementById('viz-selection'),
   vizSelectionDot: document.getElementById('viz-selection-dot'),
@@ -71,8 +74,9 @@ let workletNode = null;
 let worker = null;
 let denoiserWorker = null; // separate Worker/thread for denoiser inference - see denoiser-proxy.js for why it can't share worker-engine.js's thread
 let running = false; // a session (mic or debug replay) exists - true whether it's actively playing OR paused; only stop() clears it
-let paused = false; // the existing session's AudioContext is suspended (see pause()/resume()) - the worker/concealer/memory queue stay fully alive and untouched, only real-time chunk delivery halts
-let debugMode = false; // true while the current session's input is DEBUG_AUDIO_PATH instead of the mic
+let paused = false; // the existing session's AudioContext is suspended (see pause() and play()'s resume branch) - the worker/concealer/memory queue stay fully alive and untouched, only real-time chunk delivery halts
+let activeSource = null; // 'mic' | 'debug' | null (idle) - which source currently feeds the one shared engine; see connectSource()
+let debugMode = false; // true while the current session's input is DEBUG_AUDIO_PATH instead of the mic - kept in sync with activeSource === 'debug' for any other code still reading it
 let debugElapsedTimer = null;
 
 // Idle mic-level preview + Ping share this lightweight context, separate
@@ -363,55 +367,33 @@ async function preloadModels() {
     els.loadingProgress.hidden = true;
   } finally {
     els.startStopBtn.disabled = false;
-    if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = false;
+    if (DEBUG_MODE && els.debugStartStopBtn) els.debugStartStopBtn.disabled = false;
   }
 }
 
-// ── Start / Stop ────────────────────────────────────────────────────────
-// debugFilePath (DEBUG_MODE only): instead of opening the mic, decodes that
-// file into an AudioBuffer and feeds it into the exact same
-// AudioWorkletNode graph via an AudioBufferSourceNode. This is deliberately
-// NOT any kind of offline/batch decode - an AudioBufferSourceNode connected
-// to a live, running AudioContext plays out at the context's own real-time
-// rate, exactly like a live MediaStreamSource would, so a 2-minute file
-// takes 2 real minutes and exercises every real-time code path (VAD timing,
-// the queue/staleness logic in worker-engine.js, etc.) rather than skipping
-// past them.
-async function start({ debugFilePath = null } = {}) {
-  els.startStopBtn.disabled = true;
-  els.stopBtn.disabled = true;
-  if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = true;
-  els.status.textContent = debugFilePath ? 'Starting debug replay…' : 'Starting…';
+// ── Start / Pause / Stop ────────────────────────────────────────────────
+// The debug source (DEBUG_AUDIO_PATH, see connectSource() below): instead of
+// opening the mic, decodes that file into an AudioBuffer and feeds it into
+// the exact same AudioWorkletNode graph via an AudioBufferSourceNode. This is
+// deliberately NOT any kind of offline/batch decode - an AudioBufferSourceNode
+// connected to a live, running AudioContext plays out at the context's own
+// real-time rate, exactly like a live MediaStreamSource would, so a 2-minute
+// file takes 2 real minutes and exercises every real-time code path (VAD
+// timing, the queue/staleness logic in worker-engine.js, etc.) rather than
+// skipping past them.
+// Sets up everything SHARED regardless of source (AudioContext, worklet,
+// worker, denoiser worker, the worker's one-time 'init' - which is what
+// creates its GranSpeechMask concealer and its empty memory queue) - runs
+// exactly once, on the idle->running transition. Deliberately does NOT touch
+// the audio source (mic vs debug file) - see connectSource() for that -
+// so that switching sources later (mic <-> debug replay) never re-runs this
+// and never re-sends 'init', which is what lets the memory queue survive a
+// source switch instead of starting over empty.
+async function ensureEngine() {
+  if (running) return;
 
-  stopInputPreview();
-  if (pingActive) return; // Ping's own finally{} will restore state; don't fight it
-
-  debugMode = Boolean(debugFilePath);
   audioContext = new AudioContext();
   const sr = audioContext.sampleRate;
-
-  let debugSourceNode = null;
-  if (debugFilePath) {
-    const response = await fetch(debugFilePath);
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText} (${debugFilePath})`);
-    const arrayBuffer = await response.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    debugSourceNode = audioContext.createBufferSource();
-    debugSourceNode.buffer = audioBuffer;
-    sourceNode = debugSourceNode;
-  } else {
-    const micDeviceId = selectedMicId();
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-      },
-    });
-    sourceNode = audioContext.createMediaStreamSource(micStream);
-  }
 
   await audioContext.audioWorklet.addModule('./js/worklet-processor.js');
   workletNode = new AudioWorkletNode(audioContext, 'concealer-worklet-processor', {
@@ -498,7 +480,6 @@ async function start({ debugFilePath = null } = {}) {
     },
   });
 
-  sourceNode.connect(workletNode);
   workletNode.connect(audioContext.destination);
 
   const deviceOut = selectedSpeakerId();
@@ -509,33 +490,125 @@ async function start({ debugFilePath = null } = {}) {
       els.outputSinkWarning.textContent = `Could not switch output device: ${e.message}`;
     }
   }
-
-  running = true;
-  paused = false;
-
-  if (debugFilePath) {
-    debugSourceNode.start();
-    debugSourceNode.onended = () => {
-      if (running && debugMode) stop(); // natural end of the file, same cleanup as pressing Stop
-    };
-    const totalS = debugSourceNode.buffer.duration;
-    const startedAt = audioContext.currentTime;
-    debugElapsedTimer = setInterval(() => {
-      const elapsedS = Math.min(totalS, audioContext.currentTime - startedAt);
-      if (els.debugStatus) {
-        els.debugStatus.textContent = `Replaying ${debugFilePath} as live mic input: ${elapsedS.toFixed(0)}s / ${totalS.toFixed(0)}s`;
-      }
-    }, 500);
-  }
-
-  setControlsEnabled(false);
-  updateStartStopUI();
 }
 
+// Tears down whichever source (mic or debug file) is currently feeding
+// workletNode, if any, then connects `newSource` instead. Never touches
+// worker/concealer/memory - that's what lets switching between mic and debug
+// replay preserve the memory queue instead of restarting it empty (the
+// concealer has no idea its audio's origin changed mid-stream, same as it
+// wouldn't notice you switching microphones).
+async function connectSource(newSource) {
+  if (debugElapsedTimer) {
+    clearInterval(debugElapsedTimer);
+    debugElapsedTimer = null;
+  }
+  if (sourceNode) {
+    if (typeof sourceNode.stop === 'function') {
+      try {
+        sourceNode.stop(); // AudioBufferSourceNode (debug) only - MediaStreamAudioSourceNode has no stop()
+      } catch {
+        // Already ended naturally (onended already fired) - harmless.
+      }
+    }
+    sourceNode.disconnect();
+    sourceNode = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
+  if (els.debugStatus) els.debugStatus.textContent = '';
+  if (els.debugProgress) els.debugProgress.hidden = true;
+  if (els.debugProgressFill) els.debugProgressFill.style.width = '0%';
+
+  if (newSource === 'debug') {
+    const response = await fetch(DEBUG_AUDIO_PATH);
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText} (${DEBUG_AUDIO_PATH})`);
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    sourceNode = audioContext.createBufferSource();
+    sourceNode.buffer = audioBuffer;
+    sourceNode.connect(workletNode);
+    sourceNode.start();
+    const startedSourceNode = sourceNode;
+    sourceNode.onended = () => {
+      // Natural end of the file - same cleanup as pressing a Stop button,
+      // but only if debug is STILL the active source and this is still the
+      // current node: switching away already replaced sourceNode before
+      // this could fire, and a stale onended from the node that switch just
+      // discarded shouldn't tear down whatever's now playing instead.
+      if (running && activeSource === 'debug' && sourceNode === startedSourceNode) stop();
+    };
+    const totalS = audioBuffer.duration;
+    const startedAt = audioContext.currentTime;
+    if (els.debugProgress) els.debugProgress.hidden = false;
+    debugElapsedTimer = setInterval(() => {
+      const elapsedS = Math.min(totalS, audioContext.currentTime - startedAt);
+      if (els.debugStatus) els.debugStatus.textContent = `${elapsedS.toFixed(0)}s / ${totalS.toFixed(0)}s`;
+      if (els.debugProgressFill) els.debugProgressFill.style.width = `${(elapsedS / totalS) * 100}%`;
+    }, 500);
+  } else {
+    const micDeviceId = selectedMicId();
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+      },
+    });
+    sourceNode = audioContext.createMediaStreamSource(micStream);
+    sourceNode.connect(workletNode);
+  }
+
+  activeSource = newSource;
+  debugMode = newSource === 'debug'; // kept in sync for any other code still reading it
+}
+
+// Entry point for both transport rows' Play button. From idle, this is a
+// full cold start (ensureEngine() + connectSource()). While a session is
+// already running, clicking the INACTIVE source's Play switches to it
+// in-place (see connectSource's docstring for why that's memory-preserving)
+// and, since picking a different source to listen to implies wanting to
+// actually hear it, also resumes if the engine was paused.
+async function play(newSource) {
+  setAllTransportButtonsDisabled(true);
+  els.status.textContent = running
+    ? `Switching to ${newSource === 'debug' ? 'debug replay' : 'mic'}…`
+    : (newSource === 'debug' ? 'Starting debug replay…' : 'Starting…');
+
+  stopInputPreview();
+  if (pingActive) return; // Ping's own finally{} will restore state; don't fight it
+
+  try {
+    if (!running) {
+      await ensureEngine();
+      running = true;
+      paused = false;
+      setControlsEnabled(false);
+      await connectSource(newSource);
+    } else {
+      if (paused) {
+        audioContext.resume();
+        paused = false;
+      }
+      if (activeSource !== newSource) await connectSource(newSource);
+    }
+  } finally {
+    updateStartStopUI();
+  }
+}
+
+// Tears down EVERYTHING (worker terminated - and with it, the concealer and
+// its whole memory queue - AudioContext closed, mic released, debug source
+// stopped) regardless of which source was active. Either transport's Stop
+// button calls this same function: there is only one shared engine/memory
+// queue underneath both, so there's no such thing as stopping "just" the mic
+// side or "just" the debug side - stopping resets both at once.
 function stop() {
-  els.startStopBtn.disabled = true;
-  els.stopBtn.disabled = true;
-  if (DEBUG_MODE && els.debugBtn) els.debugBtn.disabled = true;
+  setAllTransportButtonsDisabled(true);
   if (debugElapsedTimer) {
     clearInterval(debugElapsedTimer);
     debugElapsedTimer = null;
@@ -575,6 +648,7 @@ function stop() {
   }
   running = false;
   paused = false;
+  activeSource = null;
   debugMode = false;
   els.status.textContent = 'Idle — press ▶ to begin';
   els.progress.textContent = '—';
@@ -582,23 +656,28 @@ function stop() {
   els.inLevelFill.style.width = '0%';
   els.outLevelFill.style.width = '0%';
   if (els.debugStatus) els.debugStatus.textContent = '';
+  if (els.debugProgress) els.debugProgress.hidden = true;
+  if (els.debugProgressFill) els.debugProgressFill.style.width = '0%';
   resetConcealerViz();
   setControlsEnabled(true);
   updateStartStopUI();
   startInputPreview();
 }
 
-// Pause/resume suspend or resume the EXISTING session's AudioContext -
-// unlike stop(), the worker, its GranSpeechMask concealer, and everything in
-// its memory queue stay fully alive and untouched throughout. Suspending an
-// AudioContext halts every node's processing (the worklet's process() calls
-// stop firing, so no more 'chunk' messages reach the worker - see
-// worklet-processor.js), including a debug-mode AudioBufferSourceNode's
-// playback position, which freezes and resumes exactly where it left off -
-// there's no native pause() on that node type, so suspending the whole
-// context is the standard way to achieve it. The mic stream itself (if any)
-// stays open throughout, so resuming needs no new getUserMedia permission
-// prompt and no re-creating the worker/concealer from scratch.
+// Pause suspends the EXISTING session's AudioContext - unlike stop(), the
+// worker, its GranSpeechMask concealer, and everything in its memory queue
+// stay fully alive and untouched throughout. Suspending an AudioContext
+// halts every node's processing (the worklet's process() calls stop firing,
+// so no more 'chunk' messages reach the worker - see worklet-processor.js),
+// including a debug-mode AudioBufferSourceNode's playback position, which
+// freezes and resumes exactly where it left off - there's no native pause()
+// on that node type, so suspending the whole context is the standard way to
+// achieve it. The mic stream itself (if any) stays open throughout, so
+// resuming needs no new getUserMedia permission prompt and no re-creating
+// the worker/concealer from scratch. (Resuming from a pause with the SAME
+// source still active is handled inline in play() above, alongside the
+// switch-source case - there's no separate resume() since "press this
+// source's Play button" covers both.)
 function pause() {
   if (!running || paused || !audioContext) return;
   audioContext.suspend();
@@ -607,19 +686,25 @@ function pause() {
   updateStartStopUI();
 }
 
-function resume() {
-  if (!running || !paused || !audioContext) return;
-  audioContext.resume();
-  paused = false;
-  updateStartStopUI();
+function setAllTransportButtonsDisabled(disabled) {
+  els.startStopBtn.disabled = disabled;
+  els.stopBtn.disabled = disabled;
+  if (DEBUG_MODE && els.debugStartStopBtn) els.debugStartStopBtn.disabled = disabled;
+  if (DEBUG_MODE && els.debugStopBtn) els.debugStopBtn.disabled = disabled;
 }
 
-// startStopBtn is now a Play/Pause toggle and stopBtn a dedicated Stop,
-// together controlling whichever session (mic or debug replay) is currently
-// active - only one can exist at a time, so the debug button's remaining job
-// is just starting a brand new debug session from idle (see debug.html's own
-// click handler below); it stays disabled for as long as any session, mic or
-// debug, is already running.
+// Mic and debug replay are two independent Play/Pause+Stop transports (see
+// index.html's/debug.html's .transport-row markup) sharing the ONE engine
+// above. Only one source can be actively PLAYING at a time - while one is,
+// the other's Play button is fully disabled (not just relabeled), so you
+// can't switch out from under whichever source you're actively listening
+// to by accident. Pausing the active one un-disables the other: with
+// neither actively playing, either Play button is fair game - the active
+// source's resumes it, the other's switches to it (see play(), which also
+// auto-resumes in that case, since choosing a different source to listen to
+// implies wanting to actually hear it). Either Stop button is always
+// enabled together and tears down the one shared engine entirely,
+// regardless of which source was active.
 function updateStartStopUI() {
   if (!running) {
     els.startStopBtn.textContent = '▶';
@@ -627,13 +712,22 @@ function updateStartStopUI() {
     els.startStopBtn.setAttribute('aria-label', 'Start');
     els.startStopBtn.disabled = false;
     els.stopBtn.disabled = true;
-    if (DEBUG_MODE && els.debugBtn) {
-      els.debugBtn.textContent = 'Start debugging';
-      els.debugBtn.disabled = false;
+    if (DEBUG_MODE && els.debugStartStopBtn) {
+      els.debugStartStopBtn.textContent = '▶';
+      els.debugStartStopBtn.title = 'Start debug replay';
+      els.debugStartStopBtn.setAttribute('aria-label', 'Start debug replay');
+      els.debugStartStopBtn.disabled = false;
     }
-  } else {
+    if (DEBUG_MODE && els.debugStopBtn) els.debugStopBtn.disabled = true;
+    return;
+  }
+
+  els.stopBtn.disabled = false;
+  if (DEBUG_MODE && els.debugStopBtn) els.debugStopBtn.disabled = false;
+
+  const micActive = activeSource === 'mic';
+  if (micActive) {
     els.startStopBtn.disabled = false;
-    els.stopBtn.disabled = false;
     if (paused) {
       els.startStopBtn.textContent = '▶';
       els.startStopBtn.title = 'Resume';
@@ -643,9 +737,33 @@ function updateStartStopUI() {
       els.startStopBtn.title = 'Pause';
       els.startStopBtn.setAttribute('aria-label', 'Pause');
     }
-    if (DEBUG_MODE && els.debugBtn) {
-      els.debugBtn.textContent = debugMode ? 'Debug replay running…' : 'Start debugging';
-      els.debugBtn.disabled = true;
+  } else {
+    // Debug replay is the active source - mic's button only comes alive
+    // once that's paused (see this function's own docstring above).
+    els.startStopBtn.textContent = '▶';
+    els.startStopBtn.title = paused ? 'Switch to mic' : 'Pause debug replay first to switch to mic';
+    els.startStopBtn.setAttribute('aria-label', 'Switch to mic');
+    els.startStopBtn.disabled = !paused;
+  }
+
+  if (DEBUG_MODE && els.debugStartStopBtn) {
+    const debugActive = activeSource === 'debug';
+    if (debugActive) {
+      els.debugStartStopBtn.disabled = false;
+      if (paused) {
+        els.debugStartStopBtn.textContent = '▶';
+        els.debugStartStopBtn.title = 'Resume';
+        els.debugStartStopBtn.setAttribute('aria-label', 'Resume');
+      } else {
+        els.debugStartStopBtn.textContent = '⏸';
+        els.debugStartStopBtn.title = 'Pause';
+        els.debugStartStopBtn.setAttribute('aria-label', 'Pause');
+      }
+    } else {
+      els.debugStartStopBtn.textContent = '▶';
+      els.debugStartStopBtn.title = paused ? 'Switch to debug replay' : 'Pause mic first to switch to debug replay';
+      els.debugStartStopBtn.setAttribute('aria-label', 'Switch to debug replay');
+      els.debugStartStopBtn.disabled = !paused;
     }
   }
 }
@@ -1059,15 +1177,17 @@ function resetConcealerViz() {
 
 // ── Event wiring ──────────────────────────────────────────────────────────
 els.startStopBtn.addEventListener('click', () => {
-  if (!running) {
-    start().catch((e) => {
+  if (running && activeSource === 'mic' && !paused) {
+    pause();
+  } else {
+    // Covers idle (cold start), paused-on-mic (resume), and paused-on-debug
+    // (switch to mic + auto-resume) - see play()'s own docstring. This
+    // button is disabled by updateStartStopUI() whenever debug is actively
+    // (unpaused) playing, so that case never reaches here.
+    play('mic').catch((e) => {
       els.status.textContent = `Failed to start: ${e.message}`;
       updateStartStopUI();
     });
-  } else if (paused) {
-    resume();
-  } else {
-    pause();
   }
 });
 
@@ -1075,17 +1195,22 @@ els.stopBtn.addEventListener('click', () => {
   if (running) stop();
 });
 
-if (DEBUG_MODE && els.debugBtn) {
-  // Only ever reachable while idle - updateStartStopUI() disables this
-  // button for as long as any session (mic or debug) is already running, so
-  // stopping/pausing a debug replay in progress goes through the shared
-  // Play/Pause/Stop buttons above instead of this one.
-  els.debugBtn.addEventListener('click', () => {
-    start({ debugFilePath: DEBUG_AUDIO_PATH }).catch((e) => {
-      els.status.textContent = `Failed to start debug replay: ${e.message}`;
-      debugMode = false;
-      updateStartStopUI();
-    });
+if (DEBUG_MODE && els.debugStartStopBtn) {
+  els.debugStartStopBtn.addEventListener('click', () => {
+    if (running && activeSource === 'debug' && !paused) {
+      pause();
+    } else {
+      play('debug').catch((e) => {
+        els.status.textContent = `Failed to start debug replay: ${e.message}`;
+        updateStartStopUI();
+      });
+    }
+  });
+}
+
+if (DEBUG_MODE && els.debugStopBtn) {
+  els.debugStopBtn.addEventListener('click', () => {
+    if (running) stop();
   });
 }
 

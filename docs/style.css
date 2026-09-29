@@ -21,6 +21,7 @@ body {
   select, input[type="range"] { background: #2a2c31; color: inherit; }
   .viz-status-dot { background: #40434a; }
   .viz-dot-neutral { background: #40434a; }
+  #debug-start-stop-btn, #debug-stop-btn { background: #26282d; border-color: #3a3d44; color: #9aa1ab; }
 }
 
 h1 {
@@ -176,14 +177,35 @@ input.vertical-fader {
   transition: width 120ms linear;
 }
 
+/* .progress-bar's own margin is bottom-only (see above) - the debug replay
+   one sits right under the transport-row's buttons instead of under text,
+   so it needs its own top margin too or it reads as glued to them. */
+#debug-progress {
+  margin-top: 12px;
+}
+
 .transport-row {
   display: flex;
   gap: 8px;
 }
 
+/* The main transport-row sits right under the loading-progress bar, which
+   already has its own bottom margin - the debug one sits right under a
+   plain text caption with no bottom margin of its own, so it needs an
+   explicit gap here or it reads as glued to the text above it. */
+#debug-panel .transport-row {
+  margin-top: 10px;
+}
+
 #start-stop-btn {
   flex: 1 1 auto;
-  padding: 12px;
+  /* A fixed height (rather than sizing to content) is what actually keeps
+     Play (▶) and Pause (⏸) the same size as each other - those two glyphs
+     don't share the same natural line-height/vertical metrics in most
+     fonts, so height-from-content alone made the button visibly shrink by a
+     pixel or two switching between them. */
+  height: 48px;
+  padding: 0 12px;
   font-size: 1.3rem;
   line-height: 1;
   font-weight: 600;
@@ -200,7 +222,8 @@ input.vertical-fader {
    Play/Pause for visual weight the way an equal-width button would. */
 #stop-btn {
   flex: 0 0 56px;
-  padding: 12px;
+  height: 48px;
+  padding: 0 12px;
   font-size: 1.1rem;
   line-height: 1;
   font-weight: 600;
@@ -211,8 +234,36 @@ input.vertical-fader {
   cursor: pointer;
 }
 
+/* Debug's own transport, deliberately muted/outlined rather than a solid
+   fill - this is a developer tool, not the app's actual controls, and
+   shouldn't visually compete with (or be mistaken for) the real Play/Pause
+   above it. Smaller height for the same reason. */
+#debug-start-stop-btn,
+#debug-stop-btn {
+  height: 36px;
+  padding: 0 10px;
+  font-size: 1rem;
+  line-height: 1;
+  font-weight: 600;
+  border: 1px solid #cbd0d8;
+  border-radius: 6px;
+  background: #f3f4f6;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+#debug-start-stop-btn {
+  flex: 1 1 auto;
+}
+
+#debug-stop-btn {
+  flex: 0 0 44px;
+}
+
 #start-stop-btn:disabled,
-#stop-btn:disabled {
+#stop-btn:disabled,
+#debug-start-stop-btn:disabled,
+#debug-stop-btn:disabled {
   opacity: 0.6;
   cursor: default;
 }
