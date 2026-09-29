@@ -25,6 +25,15 @@ export class TenVAD {
     this.name = name; // DIAGNOSTIC - see predict()'s [VADDIAG] logging below
     this.debug = debug; // DIAGNOSTIC gate - only worker-engine.js's debugTelemetry (i.e. debug.html) sessions pass true, so index.html never logs any of this
     this.__callCount = 0; // DIAGNOSTIC
+    // Health-summary stats - ALWAYS tracked (not gated behind `debug` above),
+    // since worker-engine.js's periodic [HEALTH] log (see its own comment)
+    // runs on every session, index.html included. Cheap running totals only
+    // - no per-call console output here, unlike the debug-only [VADDIAG]
+    // logging. See popStats().
+    this._statsCalls = 0;
+    this._statsTrueCount = 0; // only meaningful when logitThreshold is set, which it always is here
+    this._statsRatioSum = 0;
+    this._statsRatioMax = 0;
     this.module = null;
     this.handle = 0;
     this._audioPtr = 0;
@@ -111,6 +120,13 @@ export class TenVAD {
       sum += this.module.HEAPF32[this._probPtr >> 2];
     }
     const speechRatio = sum / nFrames;
+    const result = this.logitThreshold !== null ? speechRatio > this.logitThreshold : speechRatio;
+
+    // Health-summary stats - always updated, see the constructor's note.
+    this._statsCalls++;
+    this._statsRatioSum += speechRatio;
+    if (speechRatio > this._statsRatioMax) this._statsRatioMax = speechRatio;
+    if (result === true) this._statsTrueCount++;
 
     // DIAGNOSTIC (debug.html only - see this.debug above) - mirrors
     // vad-silero.js's own [VADDIAG] logging exactly, same reasoning: this is
@@ -122,6 +138,25 @@ export class TenVAD {
         console.error(`[VADDIAG ${this.name}] call#${this.__callCount} speechRatio=${speechRatio.toFixed(4)} threshold=${this.logitThreshold}`);
       }
     }
-    return this.logitThreshold !== null ? speechRatio > this.logitThreshold : speechRatio;
+    return result;
+  }
+
+  /**
+   * Read-and-reset health stats since the last call - see the constructor's
+   * note. Consumed by worker-engine.js's periodic always-on [HEALTH] log.
+   */
+  popStats() {
+    const calls = this._statsCalls;
+    const stats = {
+      calls,
+      trueRate: calls > 0 ? this._statsTrueCount / calls : null,
+      avgRatio: calls > 0 ? this._statsRatioSum / calls : null,
+      maxRatio: this._statsRatioMax,
+    };
+    this._statsCalls = 0;
+    this._statsTrueCount = 0;
+    this._statsRatioSum = 0;
+    this._statsRatioMax = 0;
+    return stats;
   }
 }

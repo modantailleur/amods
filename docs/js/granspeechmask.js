@@ -122,6 +122,24 @@ export class GranSpeechMask {
     this.memVadSeq = 0;
     this.lastMemVadDurationMs = 0;
     this.feedCycleSeq = 0; // same idea, but incremented when a cycle STARTS rather than when it finishes - see debugSnapshot()
+
+    // Health-summary stats - ALWAYS tracked (unlike feedCycleSeq/debugSnapshot()
+    // above, which are debug.html-visualization-only), consumed by
+    // worker-engine.js's periodic always-on [HEALTH] log so a plain
+    // index.html session (no debug panel) can still tell whether the memory
+    // branch is doing anything at all - this is what backs diagnosing "the
+    // concealer memory isn't filling" reports. Read-and-reset via
+    // popMemoryHealthStats(); memory.length/memoryMaxlen/minMemoryToConceal
+    // themselves are current state, not deltas, so they're read directly
+    // rather than accumulated here.
+    this._healthFeedCycles = 0;
+    this._healthCandidatesTotal = 0;
+    this._healthCandidatesPassed = 0;
+    this._healthDenoiseCalls = 0;
+    this._healthDenoiseMs = 0;
+    this._healthDenoiseMaxMs = 0;
+    this._healthDenoiseErrors = 0;
+    this._healthConcealCount = 0;
   }
 
   status() {
@@ -156,6 +174,39 @@ export class GranSpeechMask {
       feedCycleSeq: this.feedCycleSeq,
       candidateSlots: this.nConcealerBeforeDenoise, // fixed constant, known before any cycle actually runs
     };
+  }
+
+  /**
+   * Read-and-reset health stats since the last call - see the constructor's
+   * note. Consumed by worker-engine.js's periodic always-on [HEALTH] log.
+   * memorySize/memoryTarget/minMemoryToConceal/ready are current-state
+   * snapshots (not deltas), included here so a single log line has
+   * everything needed to tell whether the memory branch is stuck.
+   */
+  popMemoryHealthStats() {
+    const stats = {
+      memorySize: this.memory.length,
+      memoryTarget: this.memoryMaxlen,
+      minMemoryToConceal: this.minMemoryToConceal,
+      ready: this.memory.length >= this.minMemoryToConceal,
+      feedCycles: this._healthFeedCycles,
+      candidatesTotal: this._healthCandidatesTotal,
+      candidatesPassed: this._healthCandidatesPassed,
+      denoiseCalls: this._healthDenoiseCalls,
+      denoiseAvgMs: this._healthDenoiseCalls > 0 ? Math.round(this._healthDenoiseMs / this._healthDenoiseCalls) : null,
+      denoiseMaxMs: this._healthDenoiseCalls > 0 ? Math.round(this._healthDenoiseMaxMs) : null,
+      denoiseErrors: this._healthDenoiseErrors,
+      concealCount: this._healthConcealCount,
+    };
+    this._healthFeedCycles = 0;
+    this._healthCandidatesTotal = 0;
+    this._healthCandidatesPassed = 0;
+    this._healthDenoiseCalls = 0;
+    this._healthDenoiseMs = 0;
+    this._healthDenoiseMaxMs = 0;
+    this._healthDenoiseErrors = 0;
+    this._healthConcealCount = 0;
+    return stats;
   }
 
   /** While speech is active: extend the pending-voice window with x, start (or keep advancing) the pending-speech window, and count down any active concealing cooldown. */
@@ -239,7 +290,7 @@ export class GranSpeechMask {
       this.stopProcessing = true;
       const snapshot = Float32Array.from(this.pendingVoice);
       if (this.isStream) {
-        this._feedMemory(snapshot).catch((e) => console.error('GranSpeechMask._feedMemory failed:', e));
+        this._feedMemory(snapshot).catch((e) => console.error('[ERROR] GranSpeechMask._feedMemory failed (memory branch will retry on the next completed pending-speech window):', e));
       } else {
         await this._feedMemory(snapshot);
       }
@@ -262,11 +313,13 @@ export class GranSpeechMask {
     // denoiser-proxy.js) and so has real, independent failure modes that
     // didn't exist when it ran in-process.
     this.feedCycleSeq += 1; // debug-visualization only - see debugSnapshot()
+    this._healthFeedCycles += 1;
     try {
       const newMemory = [];
       let denoised = y;
       if (this.denoise && this.denoiser) {
         this.denoiseRunning = true; // debug-visualization only - see debugSnapshot()
+        const denoiseStartedAt = performance.now();
         try {
           denoised = await this.denoiser.predict(y);
           if (denoised.length > y.length) denoised = denoised.subarray(0, y.length);
@@ -275,8 +328,15 @@ export class GranSpeechMask {
             padded.set(denoised);
             denoised = padded;
           }
+        } catch (e) {
+          this._healthDenoiseErrors += 1;
+          throw e;
         } finally {
           this.denoiseRunning = false;
+          const denoiseMs = performance.now() - denoiseStartedAt;
+          this._healthDenoiseCalls += 1;
+          this._healthDenoiseMs += denoiseMs;
+          if (denoiseMs > this._healthDenoiseMaxMs) this._healthDenoiseMaxMs = denoiseMs;
         }
       }
 
@@ -304,7 +364,9 @@ export class GranSpeechMask {
         // eslint-disable-next-line no-await-in-loop
         const passed = await this.vad.predict(clip);
         candidateResults.push(passed);
+        this._healthCandidatesTotal += 1;
         if (passed) {
+          this._healthCandidatesPassed += 1;
           newMemory.push({ clip: Float32Array.from(clip), feat, cooldown: 0, voiceName });
         }
         start = end;
@@ -371,6 +433,7 @@ export class GranSpeechMask {
     if (!shouldConceal) return { audio: null, voiceName: '' };
 
     this.curConcealing = true;
+    this._healthConcealCount += 1;
 
     const decisionWinSamples = Math.trunc(this.sr * this.decisionWin);
     const pv = this.pendingVoice;

@@ -89,6 +89,20 @@ async function init(cfg) {
   };
   concealer = new GranSpeechMask(cfg.sr, concealerConfig, { denoiser: remoteDenoiser, vad: concealerVad });
 
+  // Always-on (not debugTelemetry-gated - see the [HEALTH] log below for why)
+  // - a single line establishing the session's config up front, so a
+  // supervisor's pasted-in console log is diagnosable on its own without
+  // needing to ask them what settings they were running with.
+  console.log('[SESSION START]', JSON.stringify({
+    sr: cfg.sr,
+    vadType: cfg.vadType === 'silero' ? 'silero' : 'ten',
+    concealingThreshold: cfg.concealingThreshold,
+    concealerMemoryThreshold: cfg.concealerMemoryThreshold,
+    denoiserEnabled: Boolean(cfg.denoiserEnabled),
+    memoryMaxlen: concealerConfig.memory_maxlen,
+    minMemoryToConceal: concealerConfig.min_memory_to_conceal,
+  }));
+
   const streamConfig = {
     sr: cfg.sr,
     channels_out: 1,
@@ -109,6 +123,21 @@ async function init(cfg) {
 }
 
 let statusTimer = null;
+let healthLogTicks = 0;
+// Every 10th 500ms status tick = ~5s - frequent enough to catch a problem
+// shortly after it starts, infrequent enough that a copy-pasted console
+// excerpt covering a whole session stays a manageable size.
+const HEALTH_LOG_EVERY_N_TICKS = 10;
+// stream.popCallbackTiming() is popped every 500ms for the UI-facing
+// 'status' message below - the [HEALTH] log fires only every 10th tick, so
+// each 500ms slice's numbers are accumulated here in between, rather than
+// the log only ever reflecting the most recent 500ms and silently dropping
+// the other ~4.5s of chunks.
+let healthMsSum = 0;
+let healthMsMax = 0;
+let healthMsCount = 0;
+let healthSlowCount = 0;
+
 function startStatusLoop() {
   if (statusTimer) return;
   statusTimer = setInterval(() => {
@@ -127,6 +156,51 @@ function startStatusLoop() {
     // to now (~50ms cadence instead of this 500ms poll).
     const debug = debugTelemetry ? concealer.debugSnapshot() : undefined;
     postMessage({ type: 'status', status, timing, debug });
+
+    // Accumulate this 500ms slice's timing into the ~5s [HEALTH] window
+    // (see the accumulator declarations above) - timing was already popped
+    // for the 'status' message above, so this is the only place it's read.
+    healthMsSum += timing.avgMs * timing.count;
+    healthMsMax = Math.max(healthMsMax, timing.maxMs);
+    healthMsCount += timing.count;
+    healthSlowCount += timing.slowCount;
+
+    // Always-on health summary (NOT gated behind debugTelemetry, unlike
+    // [ENGINEDIAG]/[VADDIAG]/[STREAMDIAG] above/elsewhere - those only ever
+    // run on debug.html, but a supervisor reporting "the memory isn't
+    // filling" is running plain index.html with no debug panel at all, so
+    // this is the only signal that will ever reach their DevTools console.
+    // One JSON-structured line every ~5s: low enough volume that a
+    // copy-pasted excerpt of a whole session is still a reasonable size, but
+    // frequent enough to catch a stall shortly after it starts. Kept
+    // separate from the periodic 'status'/postMessage above since that's for
+    // the UI, not for reading directly - this is a console.log, for humans
+    // (and for pasting back into a conversation to debug from).
+    healthLogTicks += 1;
+    if (healthLogTicks >= HEALTH_LOG_EVERY_N_TICKS) {
+      healthLogTicks = 0;
+      const sourceVadStats = sourceVad ? sourceVad.popStats() : null;
+      const concealerVadStats = concealer.vad ? concealer.vad.popStats() : null;
+      const memoryStats = concealer.popMemoryHealthStats();
+      console.log('[HEALTH]', JSON.stringify({
+        queueLength: pendingQueue.length,
+        chunksSkipped: skipCount,
+        callbackTiming: {
+          avgMs: healthMsCount > 0 ? Math.round((healthMsSum / healthMsCount) * 10) / 10 : 0,
+          maxMs: Math.round(healthMsMax * 10) / 10,
+          count: healthMsCount,
+          slowCount: healthSlowCount,
+        },
+        sourceVad: sourceVadStats,
+        concealerVad: concealerVadStats,
+        memory: memoryStats,
+      }));
+      skipCount = 0;
+      healthMsSum = 0;
+      healthMsMax = 0;
+      healthMsCount = 0;
+      healthSlowCount = 0;
+    }
   }, 500);
 }
 
@@ -166,6 +240,11 @@ const MAX_QUEUE = 200;
 // real-time conversation, so it's skipped instead.
 const MAX_STALE_MS = 150;
 let hadSkip = false;
+// Always-on count of chunks skipped for staleness since the last [HEALTH]
+// log - read-and-reset there, same pattern as stream.js's _callbackSlowCount.
+// A high rate here (relative to how many chunks arrived) is the direct
+// signature of the device falling behind in real time.
+let skipCount = 0;
 const FADE_AFTER_SKIP_S = 0.01; // smooths the deliberate join back to fresh audio after a stale run was skipped - an intentional real-time trade-off, not a fix for lost data
 
 async function handleChunk(chunk) {
@@ -197,9 +276,10 @@ async function drainQueue() {
       postMessage({ type: 'play', playMix }, [playMix.buffer]);
     } else {
       hadSkip = true; // too stale to play, but pendingVoice/concealer state above already saw it in full - memory continuity is never affected by this
+      skipCount += 1;
     }
   } catch (e) {
-    console.error('worker-engine processChunk failed:', e);
+    console.error('[ERROR] worker-engine processChunk failed (this chunk is dropped entirely - no audio played, no memory/VAD state updated for it):', e);
   } finally {
     processing = false;
     drainQueue();
@@ -211,7 +291,7 @@ self.onmessage = (event) => {
   switch (msg.type) {
     case 'init':
       init(msg.config).catch((e) => {
-        console.error('worker-engine init failed:', e);
+        console.error('[ERROR] worker-engine init failed (session never started - check vadType/denoiser model loading above):', e);
         postMessage({ type: 'error', message: String(e) });
       });
       break;

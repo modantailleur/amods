@@ -25,6 +25,15 @@ export class ConcealerStream {
     this._callbackMsSum = 0;
     this._callbackMsMax = 0;
     this._callbackMsCount = 0;
+    // Count (not log) of chunks that ran over their real-time budget - a
+    // per-chunk [SLOW CALLBACK] warning used to fire here directly, but that
+    // spams the console under any sustained slowdown (one line per ~20ms
+    // chunk) right when it's least useful to be scrolling past duplicate
+    // lines. worker-engine.js's periodic [HEALTH] log reports this count
+    // instead, alongside avgMs/maxMs from popCallbackTiming() below - a
+    // single "N/M chunks over budget, max Xms" line already says everything
+    // the per-chunk spam did.
+    this._callbackSlowCount = 0;
 
     // Debug-visualization only (see docs/debug.html) - the concealing
     // branch's most recent real-time VAD decision, for display alongside
@@ -132,20 +141,21 @@ export class ConcealerStream {
     this._callbackMsMax = Math.max(this._callbackMsMax, elapsedMs);
     this._callbackMsCount += 1;
     const budgetMs = (frames / sr) * 1000;
-    if (elapsedMs > budgetMs) {
-      console.warn(`[SLOW CALLBACK] took ${elapsedMs.toFixed(1)}ms, budget was ${budgetMs.toFixed(1)}ms`);
-    }
+    if (elapsedMs > budgetMs) this._callbackSlowCount += 1;
 
     return { playMix, recMix, voiceName, concealerBlock: concBlock };
   }
 
-  /** Pop and reset the average/max callback-time stats (mirrors Stream.pop_callback_timing). */
+  /** Pop and reset the average/max/slow-count callback-time stats (mirrors Stream.pop_callback_timing). */
   popCallbackTiming() {
     const avg = this._callbackMsCount > 0 ? this._callbackMsSum / this._callbackMsCount : 0;
     const max = this._callbackMsMax;
+    const count = this._callbackMsCount;
+    const slowCount = this._callbackSlowCount;
     this._callbackMsSum = 0;
     this._callbackMsMax = 0;
     this._callbackMsCount = 0;
-    return { avgMs: avg, maxMs: max };
+    this._callbackSlowCount = 0;
+    return { avgMs: avg, maxMs: max, count, slowCount };
   }
 }
