@@ -57,7 +57,6 @@ const els = {
   vizSelection: document.getElementById('viz-selection'),
   vizSelectionDot: document.getElementById('viz-selection-dot'),
   vizDenoise: document.getElementById('viz-denoise'),
-  vizDenoiseSecs: document.getElementById('viz-denoise-secs'),
   vizMemVad: document.getElementById('viz-mem-vad'),
   vizCandidates: document.getElementById('viz-candidates'),
   vizMemoryDots: document.getElementById('viz-memory-dots'),
@@ -873,33 +872,11 @@ function updateConcealerViz(debug) {
     els.vizSelectionDot.title = concealing ? `memory index #${debug.selectedIndex} is selected` : 'no clip currently selected';
   }
 
+  // The denoise pass is fast enough in practice that a live elapsed-time
+  // readout isn't worth the label-width juggling it used to require - the
+  // status dot lighting up for exactly as long as denoiseRunning is true is
+  // enough on its own to show when it starts and ends.
   if (els.vizDenoise) els.vizDenoise.classList.toggle('viz-block-active', Boolean(debug.denoiseRunning));
-  if (els.vizDenoiseSecs) {
-    // Always show the parenthesized part, even as a placeholder ("--.-s") -
-    // switching between "Noise reduction" and "Noise reduction (Xs)" would
-    // change the label's width and shift everything after it in the row.
-    // Zero-padded to a fixed "00.0" shape (so 1s reads "01.0s", not "1.0s")
-    // for the same reason - a single vs. double-digit second count would
-    // otherwise shift the row too. The actual pixel-width stability comes
-    // from #viz-denoise-secs's own fixed-width CSS box (see style.css) -
-    // "-" and "0" aren't the same glyph width in a proportional font, so
-    // matching character COUNT alone (this padStart) isn't sufficient on
-    // its own, only necessary.
-    //
-    // Gated on denoiseRunning, not just msSinceDenoiseStart != null -
-    // granspeechmask.js's lastDenoiseStartedAt is only ever set when a call
-    // starts, never cleared when it ends, so msSinceDenoiseStart alone would
-    // just keep counting up forever after the very first denoise call ever
-    // runs (idle time between cycles included) instead of showing "this
-    // call's elapsed time, or nothing". Checking denoiseRunning here - the
-    // same flag the status dot above already keys off - keeps the number
-    // and the dot lighting up/reverting in lockstep: numbers only appear
-    // for as long as a denoise call is actually in flight.
-    const secs = debug.denoiseRunning && debug.msSinceDenoiseStart != null
-      ? (debug.msSinceDenoiseStart / 1000).toFixed(1).padStart(4, '0')
-      : '--.-';
-    els.vizDenoiseSecs.textContent = secs;
-  }
 
   // A new feed cycle starting is when we first know how many candidates
   // there will be (candidateSlots is a fixed constant, not counted after
@@ -1001,7 +978,6 @@ function resetConcealerViz() {
     els.vizSelectionDot.title = 'no clip currently selected';
   }
   if (els.vizDenoise) els.vizDenoise.classList.remove('viz-block-active');
-  if (els.vizDenoiseSecs) els.vizDenoiseSecs.textContent = '--.-';
   if (els.vizMemVad) {
     els.vizMemVad.classList.remove('viz-block-active');
     clearTimeout(els.vizMemVad.__pulseTimeout);

@@ -85,7 +85,6 @@ export class GranSpeechMask {
     this.lastSelectedIndex = null;
     this.lastFeedCandidates = [];
     this.denoiseRunning = false;
-    this.lastDenoiseStartedAt = null; // a performance.now() timestamp local to this worker - never sent across the worker boundary as-is, see debugSnapshot()
     // memVadSeq starts at 0 ("no cycle has run yet") and increments once per
     // completed cycle - lets main.js's display tell "a new cycle just
     // finished" apart from "still the same cycle as last poll" without
@@ -123,10 +122,6 @@ export class GranSpeechMask {
       selectedIndex: this.curConcealing ? this.lastSelectedIndex : null,
       lastCandidates: this.lastFeedCandidates,
       denoiseRunning: this.denoiseRunning,
-      // A plain duration (computed here, in this worker's own clock),
-      // never a raw timestamp - performance.now() time origins aren't
-      // comparable across the worker/main-thread boundary.
-      msSinceDenoiseStart: this.lastDenoiseStartedAt != null ? performance.now() - this.lastDenoiseStartedAt : null,
       memVadSeq: this.memVadSeq,
       memVadDurationMs: this.lastMemVadDurationMs,
       feedCycleSeq: this.feedCycleSeq,
@@ -223,7 +218,6 @@ export class GranSpeechMask {
       let denoised = y;
       if (this.denoise && this.denoiser) {
         this.denoiseRunning = true; // debug-visualization only - see debugSnapshot()
-        this.lastDenoiseStartedAt = performance.now();
         try {
           denoised = await this.denoiser.predict(y);
           if (denoised.length > y.length) denoised = denoised.subarray(0, y.length);
