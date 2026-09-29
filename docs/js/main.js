@@ -914,7 +914,14 @@ function playDebugMemoryClip(clip, clipSr) {
   buffer.copyToChannel(clip, 0);
   const src = debugPlaybackContext.createBufferSource();
   src.buffer = buffer;
-  src.connect(debugPlaybackContext.destination);
+  // Same gain a real concealer insertion would get in the live pipeline
+  // (see conc_multiplier in worker-engine.js/stream.js) - so a clip that
+  // sounds too loud/quiet here reflects how it'd actually sound if picked
+  // as a real concealer, not just its own raw recorded level.
+  const gain = debugPlaybackContext.createGain();
+  gain.gain.value = dbToMultiplier(els.concLevel.value);
+  src.connect(gain);
+  gain.connect(debugPlaybackContext.destination);
   src.start();
 }
 
