@@ -198,7 +198,7 @@ input.vertical-fader {
 }
 
 #start-stop-btn {
-  flex: 1 1 auto;
+  flex: 0 0 96px;
   /* A fixed height (rather than sizing to content) is what actually keeps
      Play (▶) and Pause (⏸) the same size as each other - those two glyphs
      don't share the same natural line-height/vertical metrics in most
@@ -253,7 +253,7 @@ input.vertical-fader {
 }
 
 #debug-start-stop-btn {
-  flex: 1 1 auto;
+  flex: 0 0 72px;
 }
 
 #debug-stop-btn {
