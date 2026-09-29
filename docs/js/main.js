@@ -989,7 +989,7 @@ function classifyMemoryEntry(entry, i, debug) {
   // expire before a clip's own audio has finished draining out of
   // pendingConc, letting a new selection genuinely overlap a still-playing
   // one in the real output mix, not just replace it.
-  if (debug?.selectedIndices?.includes(i)) return { cls: 'viz-dot-blue', title: 'currently selected - click to play', index };
+  if (debug?.selectedIndices?.includes(i)) return { cls: 'viz-dot-blue', title: 'currently active - click to play', index };
   if (entry.cooldown > 0) return { cls: 'viz-dot-orange', title: `on hold - reused ${entry.cooldown} cycles ago - click to play`, index };
   if (entry.tooCloseToBuffer) return { cls: 'viz-dot-orange', title: 'on hold - too close to the live buffer - click to play', index };
   return { cls: 'viz-dot-neutral', title: 'available - click to play', index };
@@ -1131,8 +1131,8 @@ function updateConcealerViz(debug) {
   if (els.vizSelectionDot) {
     els.vizSelectionDot.className = `viz-dot ${concealing ? 'viz-dot-blue' : 'viz-dot-empty'}`;
     els.vizSelectionDot.title = concealing
-      ? `memory index #${selectedIndices.join(', #')} ${selectedIndices.length > 1 ? 'are' : 'is'} selected`
-      : 'no clip currently selected';
+      ? `memory index #${selectedIndices.join(', #')} ${selectedIndices.length > 1 ? 'are' : 'is'} active`
+      : 'no clip currently active';
   }
 
   // The denoise pass is fast enough in practice that a live elapsed-time
@@ -1238,7 +1238,7 @@ function resetConcealerViz() {
   if (els.vizSelection) els.vizSelection.classList.remove('viz-block-active');
   if (els.vizSelectionDot) {
     els.vizSelectionDot.className = 'viz-dot viz-dot-empty';
-    els.vizSelectionDot.title = 'no clip currently selected';
+    els.vizSelectionDot.title = 'no clip currently active';
   }
   if (els.vizDenoise) els.vizDenoise.classList.remove('viz-block-active');
   if (els.vizMemVad) {
