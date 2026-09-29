@@ -439,6 +439,8 @@ async function start({ debugFilePath = null } = {}) {
       // must never run on worker-engine.js's own thread.
       if (denoiserWorker) denoiserWorker.postMessage(msg, [msg.y.buffer]);
       else worker.postMessage({ type: 'denoiseError', id: msg.id, message: 'denoiser worker not available' });
+    } else if (msg.type === 'debugMemoryClip' && DEBUG_MODE) {
+      playDebugMemoryClip(msg.clip, msg.sr);
     }
   };
   workletNode.port.onmessage = (event) => {
@@ -709,7 +711,15 @@ let evictTransitionUntil = 0;
 function renderDots(container, dotSpecs) {
   if (!container) return;
   container.innerHTML = dotSpecs
-    .map(({ cls, title }) => `<span class="viz-dot ${cls}" title="${title || ''}"></span>`)
+    .map(({ cls, title, index }) => {
+      // Only memory-queue dots that correspond to a real, currently-live
+      // memory entry carry `index` (see classifyMemoryEntry) - that's what
+      // makes them clickable (see the delegated click listener below) and
+      // everything else (empty/reserved slots, entries mid-eviction-fade-out)
+      // inert, since there'd be nothing live left to play for those.
+      const dataAttr = index != null ? ` data-mem-index="${index}"` : '';
+      return `<span class="viz-dot ${cls}" title="${title || ''}"${dataAttr}></span>`;
+    })
     .join('');
 }
 
@@ -735,10 +745,15 @@ function reservedMemoryDots(count) {
 }
 
 function classifyMemoryEntry(entry, i, debug) {
-  if (i === debug?.selectedIndex) return { cls: 'viz-dot-blue', title: 'currently selected' };
-  if (entry.cooldown > 0) return { cls: 'viz-dot-orange', title: `on hold - reused ${entry.cooldown} cycles ago` };
-  if (entry.tooCloseToBuffer) return { cls: 'viz-dot-orange', title: 'on hold - too close to the live buffer' };
-  return { cls: 'viz-dot-neutral', title: 'available' };
+  // i is -1 for entries rendered from previousMemorySnapshot mid-eviction
+  // (see renderMemoryTransition's evictedSpecs) - those have already been
+  // dropped from the concealer's real memory array by the time we see them,
+  // so there's no live index left to request playback for.
+  const index = i >= 0 ? i : undefined;
+  if (i === debug?.selectedIndex) return { cls: 'viz-dot-blue', title: 'currently selected - click to play', index };
+  if (entry.cooldown > 0) return { cls: 'viz-dot-orange', title: `on hold - reused ${entry.cooldown} cycles ago - click to play`, index };
+  if (entry.tooCloseToBuffer) return { cls: 'viz-dot-orange', title: 'on hold - too close to the live buffer - click to play', index };
+  return { cls: 'viz-dot-neutral', title: 'available - click to play', index };
 }
 
 // The queue's normal, fixed-slot-count render - used both on every plain
@@ -755,7 +770,7 @@ function renderMemoryQueue(debug) {
     if (i >= memory.length) return { cls: 'viz-dot-empty', title: 'empty slot' };
     if (flashing && i >= flashFromIndex) {
       const enterClass = animateThisRender ? ' viz-dot-entering' : '';
-      return { cls: `viz-dot-green${enterClass}`, title: 'just added to memory' };
+      return { cls: `viz-dot-green${enterClass}`, title: 'just added to memory - click to play', index: i };
     }
     return classifyMemoryEntry(memory[i], i, debug);
   });
@@ -778,7 +793,7 @@ function renderMemoryTransition(evictedSpecs, debug) {
   const flashFromIndex = memory.length - memoryFlashCount;
   const exitingSpecs = evictedSpecs.map(({ cls, title }) => ({ cls: `${cls} viz-dot-exiting`, title }));
   const newSpecs = memory.map((entry, i) => {
-    if (i >= flashFromIndex) return { cls: 'viz-dot-green viz-dot-entering', title: 'just added to memory' };
+    if (i >= flashFromIndex) return { cls: 'viz-dot-green viz-dot-entering', title: 'just added to memory - click to play', index: i };
     return classifyMemoryEntry(entry, i, debug);
   });
   // Same total element count as the normal render (maxlen + candidateSlots) -
@@ -816,6 +831,30 @@ function pulseDots(container, dotSpecs, durationMs, idleSpecs) {
 if (DEBUG_MODE && els.vizCandidates) renderDots(els.vizCandidates, emptyCandidateDots(lastKnownCandidateSlots));
 if (DEBUG_MODE && els.vizMemoryDots) {
   renderDots(els.vizMemoryDots, [...emptyMemoryDots(lastKnownMemorySlots), ...reservedMemoryDots(lastKnownCandidateSlots)]);
+  // Delegated (not per-dot) since renderDots fully replaces the container's
+  // children on every render - a listener attached to an individual <span>
+  // would be gone the next time this queue re-renders. Only dots carrying
+  // data-mem-index (see classifyMemoryEntry/renderDots) are live memory
+  // entries; clicking an empty/reserved/fading-out one does nothing.
+  els.vizMemoryDots.addEventListener('click', (event) => {
+    const dot = event.target.closest('[data-mem-index]');
+    if (!dot || !worker) return;
+    worker.postMessage({ type: 'debugPlayMemoryClip', index: Number(dot.dataset.memIndex) });
+  });
+}
+
+// Debug-visualization only - plays a stored memory clip's actual audio
+// (clicked from the memory queue above) directly to the speakers, bypassing
+// the whole real-time worklet/mixing pipeline entirely - this is just a
+// one-shot preview, not something that should touch pendingConc/recording.
+function playDebugMemoryClip(clip, clipSr) {
+  if (!audioContext) return;
+  const buffer = audioContext.createBuffer(1, clip.length, clipSr);
+  buffer.copyToChannel(clip, 0);
+  const src = audioContext.createBufferSource();
+  src.buffer = buffer;
+  src.connect(audioContext.destination);
+  src.start();
 }
 
 function updateConcealerViz(debug) {

@@ -409,6 +409,13 @@ select {
    pops a new row into view only to have it collapse away again right after. */
 .viz-dot-reserved { visibility: hidden; }
 
+/* Only dots carrying data-mem-index are live memory entries you can click
+   to hear (see main.js's delegated click listener) - a plain :hover on
+   every .viz-dot would also light up empty/reserved/fading-out slots that
+   do nothing when clicked. */
+.viz-dot[data-mem-index] { cursor: pointer; }
+.viz-dot[data-mem-index]:hover { outline: 2px solid #2f6fed; outline-offset: 1px; }
+
 /* Memory queue is a FIFO: new entries land at the end, and once full, that
    many entries fall off the front to make room. Rendering straight to the
    fixed slot count made this read as "new entries overwrite the newest

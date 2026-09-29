@@ -187,6 +187,20 @@ self.onmessage = (event) => {
     case 'denoiserInitError':
       if (remoteDenoiser) remoteDenoiser.rejectAll(msg.message);
       break;
+    case 'debugPlayMemoryClip': {
+      // Debug-visualization only (see docs/debug.html) - lets clicking a
+      // memory-queue dot hear what's actually stored there. Only sent by
+      // debug.html's click handler, never by index.html, but harmless
+      // either way: a stale/out-of-range index (e.g. the entry got evicted
+      // between the click and this message arriving) just finds nothing and
+      // silently does nothing.
+      const entry = concealer && concealer.memory[msg.index];
+      if (entry) {
+        const clipCopy = Float32Array.from(entry.clip); // defensive copy - postMessage's transfer list would otherwise detach the actual stored clip's buffer
+        postMessage({ type: 'debugMemoryClip', clip: clipCopy, sr }, [clipCopy.buffer]);
+      }
+      break;
+    }
     case 'stop':
       if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
       break;
