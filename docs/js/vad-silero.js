@@ -11,10 +11,13 @@ const FRAME_SIZE = 512; // samples per frame at 16kHz
 
 export class SileroVAD {
   /** @param {ort.InferenceSession} session - loaded from silero_vad.onnx */
-  constructor(session, { logitThreshold = null, sr = 16000 } = {}) {
+  constructor(session, { logitThreshold = null, sr = 16000, name = '?', debug = false } = {}) {
     this.session = session;
     this.sr = sr;
     this.logitThreshold = logitThreshold;
+    this.name = name; // DIAGNOSTIC - see predict()'s [VADDIAG] logging below
+    this.debug = debug; // DIAGNOSTIC gate - only worker-engine.js's debugTelemetry (i.e. debug.html) sessions pass true, so index.html never logs any of this
+    this.__callCount = 0; // DIAGNOSTIC
     this._resetState();
   }
 
@@ -56,6 +59,20 @@ export class SileroVAD {
     }
     const speechRatio = sum / nFrames;
 
+    // DIAGNOSTIC (debug.html only - see this.debug above) - see
+    // docs/js/debug-log.js/scripts/debug-log-server.mjs for where this ends
+    // up (browser console + a local terminal, tagged by realm). Sampled (not
+    // every call) to stay readable: every 20th call, or any call worth
+    // noticing (speechRatio approaching/crossing a typical threshold). This
+    // is what caught the shared-InferenceSession bug (see worker-engine.js's
+    // sourceVadSession/concealerVadSession comment) - kept in place since
+    // debugging VAD behavior live is an ongoing need, not a one-off.
+    if (this.debug) {
+      this.__callCount++;
+      if (this.__callCount % 20 === 0 || speechRatio > 0.3) {
+        console.error(`[VADDIAG ${this.name}] call#${this.__callCount} speechRatio=${speechRatio.toFixed(4)} threshold=${this.logitThreshold} stateSample=${this.state.data[0].toFixed(4)}`);
+      }
+    }
     return this.logitThreshold !== null ? speechRatio > this.logitThreshold : speechRatio;
   }
 }

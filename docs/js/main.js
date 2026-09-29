@@ -10,12 +10,20 @@
 // equivalent slider does.
 import { applyFade } from './audio-utils.js';
 import { DENOISER_MODEL_PATHS } from './denoiser-models.js';
+import { installDebugLogRelay } from './debug-log.js';
 
 // Set by debug.html (never by index.html) before this module loads. Gates
 // every debug-only feature below so the production page never wires any of
 // it up - on index.html, #debug-start-stop-btn etc. simply don't exist in the DOM.
 const DEBUG_MODE = window.DEBUG_MODE === true;
 const DEBUG_AUDIO_PATH = './audios/test.wav';
+
+// Streams every console.log/warn/error from here on to a local terminal tool
+// (run `node scripts/debug-log-server.mjs`) instead of requiring DevTools +
+// copy-paste - see debug-log.js. worker-engine.js installs its own copy of
+// this (gated on cfg.debugTelemetry) since a Worker has its own separate
+// console; this call only covers the main thread's half.
+if (DEBUG_MODE) installDebugLogRelay('main');
 
 const CHUNK_SIZE_AT_48K = 2400; // 50ms, matches stream_config.buffer_duration in the Python default config
 
@@ -57,6 +65,8 @@ const els = {
   debugStatus: document.getElementById('debug-status'),
   debugProgress: document.getElementById('debug-progress'),
   debugProgressFill: document.getElementById('debug-progress-fill'),
+  listenOriginalToggle: document.getElementById('listen-original-toggle'),
+  listenConcealerToggle: document.getElementById('listen-concealer-toggle'),
   vizRtVad: document.getElementById('viz-rt-vad'),
   vizSelection: document.getElementById('viz-selection'),
   vizSelectionDot: document.getElementById('viz-selection-dot'),
@@ -475,8 +485,19 @@ async function ensureEngine() {
       concealingThreshold: rateToThreshold(els.concealingRate.value),
       concealerMemoryThreshold: purityToThreshold(els.concealerMemoryRate.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
-      monitorGain: 0.0,
+      // Full volume, not silenced - listenOriginal below is now what decides
+      // whether the original mic signal is audible at all (see stream.js's
+      // playSum), same role conc_multiplier already plays for the concealer
+      // track. Muting it here too, on top of that, would make the "Original
+      // audio" toggle turn it on at volume zero - exactly the bug that made
+      // toggling it produce no audible change until this was fixed.
+      monitorGain: 1.0,
       debugTelemetry: DEBUG_MODE,
+      // Toggles only exist in debug.html's DOM - index.html keeps the
+      // original always-concealer-only-on-speaker behavior these defaults
+      // (false/true) already matched before either toggle existed.
+      listenOriginal: els.listenOriginalToggle?.checked ?? false,
+      listenConcealer: els.listenConcealerToggle?.checked ?? true,
     },
   });
 
@@ -526,7 +547,20 @@ async function connectSource(newSource) {
     const response = await fetch(DEBUG_AUDIO_PATH);
     if (!response.ok) throw new Error(`${response.status} ${response.statusText} (${DEBUG_AUDIO_PATH})`);
     const arrayBuffer = await response.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    let audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    // Force mono, taking only the first channel - matches the mic path,
+    // which requests channelCount: 1 from getUserMedia explicitly. Without
+    // this, a stereo debug file's default channel handling when connected to
+    // workletNode (channelCountMode "max", not forced down to 1) is up to
+    // the browser rather than something we control, so a stereo file could
+    // behave differently from the mono debug file this was tested with.
+    // Rebuilding a genuinely single-channel buffer removes that ambiguity
+    // entirely, regardless of how many channels the source file has.
+    if (audioBuffer.numberOfChannels > 1) {
+      const mono = audioContext.createBuffer(1, audioBuffer.length, audioBuffer.sampleRate);
+      mono.copyToChannel(audioBuffer.getChannelData(0), 0);
+      audioBuffer = mono;
+    }
     sourceNode = audioContext.createBufferSource();
     sourceNode.buffer = audioBuffer;
     sourceNode.connect(workletNode);
@@ -1239,6 +1273,18 @@ els.concLevel.addEventListener('input', () => {
   els.concLevelValue.textContent = `${parseFloat(els.concLevel.value) >= 0 ? '+' : ''}${els.concLevel.value} dB`;
   if (worker && running) worker.postMessage({ type: 'setConcMultiplier', value: mult });
 });
+
+if (DEBUG_MODE && els.listenOriginalToggle) {
+  els.listenOriginalToggle.addEventListener('change', () => {
+    if (worker && running) worker.postMessage({ type: 'setListenOriginal', value: els.listenOriginalToggle.checked });
+  });
+}
+
+if (DEBUG_MODE && els.listenConcealerToggle) {
+  els.listenConcealerToggle.addEventListener('change', () => {
+    if (worker && running) worker.postMessage({ type: 'setListenConcealer', value: els.listenConcealerToggle.checked });
+  });
+}
 
 populateDevices().catch((e) => {
   els.status.textContent = `Could not list audio devices: ${e.message}`;

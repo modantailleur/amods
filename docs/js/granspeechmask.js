@@ -76,6 +76,23 @@ export class GranSpeechMask {
     // across long stretches of pure silence/noise.
     this.pendingSpeechActive = false;
     this.pendingSpeechSamples = 0;
+    // Tracks whether genuinely NEW voice activity (not just elapsed time -
+    // pendingSpeechSamples keeps counting through silence too once active,
+    // by design) happened while a feed was already in flight, and how many
+    // samples (voice or silence) have passed since that new onset - see
+    // update()/_feedMemory's finally block. Without this, _feedMemory's own
+    // cleanup has no way to tell "the 2s window that just fired naturally
+    // ran a little over into the async gap before finally() got to run" (no
+    // real new activity - should reset to fully idle) apart from "a second,
+    // separate burst of speech genuinely started during that gap" (should
+    // get its own fresh window) - both looked identical as plain elapsed
+    // pendingSpeechSamples, so treating any leftover as "preserve it" caused
+    // the window to effectively never fully go idle: every cycle's cleanup
+    // always has *some* leftover from its own async gap alone, with zero
+    // new voice required, which kept re-arming a fresh fire every ~1s
+    // forever regardless of whether anyone was actually still talking.
+    this.freshOnsetDuringFeed = false;
+    this.freshOnsetSamples = 0;
 
     // Debug-visualization only (see docs/debug.html and debugSnapshot()
     // below) - which memory index getConcealer most recently chose, and
@@ -138,8 +155,17 @@ export class GranSpeechMask {
     if (!this.pendingSpeechActive) {
       this.pendingSpeechActive = true; // voice just started after being idle - the fixed window begins now
       this.pendingSpeechSamples = 0;
+    } else if (this.stopProcessing && !this.freshOnsetDuringFeed) {
+      // Real, new voice activity while a previous feed is still in flight -
+      // this deserves its own full fresh window once that feed's cleanup
+      // hands off to it (see _feedMemory's finally block), not to be
+      // silently folded into the window that's already mid-flight and about
+      // to be discarded.
+      this.freshOnsetDuringFeed = true;
+      this.freshOnsetSamples = 0;
     }
     this.pendingSpeechSamples += x.length;
+    if (this.freshOnsetDuringFeed) this.freshOnsetSamples += x.length;
 
     if (this.curConcealing) {
       this.concealingCountdown -= x.length;
@@ -159,6 +185,10 @@ export class GranSpeechMask {
     // cancel it - it keeps counting toward the fixed pendingVoiceMaxDuration
     // deadline exactly like a voice-active chunk would (see updateMemory).
     if (this.pendingSpeechActive) this.pendingSpeechSamples += x.length;
+    // A fresh onset (see update()) keeps counting through silence too, same
+    // reasoning as pendingSpeechSamples above - once it's started, it's a
+    // real window in its own right, not dependent on continuous voice.
+    if (this.freshOnsetDuringFeed) this.freshOnsetSamples += x.length;
     this.curConcealing = false;
     this.concealingCountdown = 0;
   }
@@ -273,8 +303,34 @@ export class GranSpeechMask {
 
       if (!this.isStream) this.pendingVoice = [];
     } finally {
-      this.pendingSpeechActive = false;
-      this.pendingSpeechSamples = 0;
+      // NOT a blind reset to false/0 - this call is async (the denoiser
+      // await above can easily take ~1s), and update()/refresh() keep
+      // running on every chunk that whole time regardless of stopProcessing
+      // (see updateMemory's own docstring - a window must be checkable even
+      // mid-feed). If genuinely NEW voice activity started a fresh window
+      // WHILE this feed was in flight (see update()'s freshOnsetDuringFeed
+      // tracking), hand off to it with its own honestly-counted sample
+      // total, rather than either (a) blindly resetting to idle, which
+      // would silently discard that new window's progress entirely - it'd
+      // need a brand new voice onset to ever start counting again, which is
+      // exactly the "a burst 2s after the first one doesn't get picked up
+      // AT ALL" bug - or (b) naively treating "pendingSpeechSamples minus
+      // maxLen" as the overflow to carry forward, which double-counts: that
+      // difference is just however much time this async gap itself took, a
+      // NONZERO amount on every single cycle regardless of whether any new
+      // voice ever happened - which re-armed a fresh fire every ~1s forever
+      // even in total silence (the "constantly triggered no matter what"
+      // bug). Only a real freshOnsetDuringFeed deserves to survive; mere
+      // elapsed processing time on its own does not.
+      if (this.freshOnsetDuringFeed) {
+        this.pendingSpeechActive = true;
+        this.pendingSpeechSamples = this.freshOnsetSamples;
+      } else {
+        this.pendingSpeechActive = false;
+        this.pendingSpeechSamples = 0;
+      }
+      this.freshOnsetDuringFeed = false;
+      this.freshOnsetSamples = 0;
       this.stopProcessing = false;
     }
   }

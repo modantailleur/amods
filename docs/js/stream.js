@@ -8,11 +8,13 @@ export class ConcealerStream {
    * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier }
    * @param {SileroVAD} sourceVad - the real-time "is speech happening now" VAD (distinct from concealer.vad).
    * @param {GranSpeechMask} concealer
+   * @param {boolean} debug - debug.html's debugTelemetry flag; gates [STREAMDIAG] logging below (see worker-engine.js)
    */
-  constructor(streamConfig, sourceVad, concealer) {
+  constructor(streamConfig, sourceVad, concealer, debug = false) {
     this.streamConfig = streamConfig;
     this.sourceVad = sourceVad;
     this.concealer = concealer;
+    this.debug = debug; // DIAGNOSTIC gate
 
     this.pendingConcMaxSize = concealer.pendingConcMaxSize;
     this.pendingConc = new Float32Array(this.pendingConcMaxSize);
@@ -28,6 +30,16 @@ export class ConcealerStream {
     // branch's most recent real-time VAD decision, for display alongside
     // the memory branch's own VAD. Harmless to always maintain (one bool).
     this.lastVoiceActivity = false;
+    // Also debug-visualization only, but tracking something different:
+    // lastVoiceActivity is a single chunk's verdict (~50ms), while the
+    // status loop that reads it only polls every ~500ms (see
+    // worker-engine.js's startStatusLoop) - a brief blip of speech shorter
+    // than that gap could easily flip true then false again between two
+    // polls and never be sampled at all. This instead OR's every chunk's
+    // verdict since the last poll, so "was there ANY voice activity in the
+    // last ~500ms" is what gets reported, not just "was the single most
+    // recent chunk voice-active" - see popVoiceActiveSincePoll().
+    this.voiceActiveSincePoll = false;
   }
 
   resetState() {
@@ -49,8 +61,18 @@ export class ConcealerStream {
     const t0 = performance.now();
     const frames = x.length;
 
+    // DIAGNOSTIC (debug.html only) - proves processChunk itself is still
+    // being called at a steady cadence (rules out the whole pipeline having
+    // silently hung, as opposed to a specific piece like the VAD misbehaving
+    // while everything around it keeps running fine).
+    if (this.debug) {
+      this.__chunkCount = (this.__chunkCount || 0) + 1;
+      if (this.__chunkCount % 40 === 0) console.error(`[STREAMDIAG] processChunk call#${this.__chunkCount}`);
+    }
+
     const voiceActivity = await this.sourceVad.predict(x); // forecast === x (identity forecaster)
     this.lastVoiceActivity = voiceActivity;
+    if (voiceActivity) this.voiceActiveSincePoll = true;
     let voiceName = '';
     // updateMemory runs every chunk regardless of voice activity - not just
     // while getConcealer's own voice-active branch runs - so that once a
@@ -87,10 +109,22 @@ export class ConcealerStream {
       recMic[i] = recordMicGain * x[i];
     }
 
+    // Debug-only toggles (see docs/debug.html) - independent of monitorGain/
+    // conc_multiplier above, which control each track's own VOLUME when
+    // included. These instead gate whether a track is in the played mix AT
+    // ALL, so you can A/B "what does the concealer alone sound like" vs "how
+    // does it sound blended with my real voice" without having to fiddle
+    // with monitorGain (which stays 0 by default outside of this, matching
+    // production's original mic-not-monitored behavior). recSum deliberately
+    // ignores these - it's the "full" mix regardless of what you chose to
+    // listen to, for whenever recording is wired up.
+    const listenOriginal = this.streamConfig.listen_original ?? false;
+    const listenConcealer = this.streamConfig.listen_concealer ?? true;
+
     const playSum = new Float32Array(frames);
     const recSum = new Float32Array(frames);
     for (let i = 0; i < frames; i++) {
-      playSum[i] = playMic[i] + concBlock[i];
+      playSum[i] = (listenOriginal ? playMic[i] : 0) + (listenConcealer ? concBlock[i] : 0);
       recSum[i] = recMic[i] + concBlock[i];
     }
 
@@ -120,5 +154,12 @@ export class ConcealerStream {
     this._callbackMsMax = 0;
     this._callbackMsCount = 0;
     return { avgMs: avg, maxMs: max };
+  }
+
+  /** Debug-visualization only - pop (read then reset) whether any chunk was voice-active since the last call. See voiceActiveSincePoll's own comment for why this exists instead of just reading lastVoiceActivity. */
+  popVoiceActiveSincePoll() {
+    const v = this.voiceActiveSincePoll;
+    this.voiceActiveSincePoll = false;
+    return v;
   }
 }

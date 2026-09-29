@@ -25,6 +25,7 @@ import { GranSpeechMask } from './granspeechmask.js';
 import { ConcealerStream } from './stream.js';
 import { RemoteDenoiser } from './denoiser-proxy.js';
 import { applyFadeIn } from './audio-utils.js';
+import { installDebugLogRelay } from './debug-log.js';
 
 let stream = null;
 let concealer = null;
@@ -36,10 +37,27 @@ let debugTelemetry = false; // set from cfg.debugTelemetry - see docs/debug.html
 async function init(cfg) {
   sr = cfg.sr;
   debugTelemetry = Boolean(cfg.debugTelemetry);
-  const vadSession = await ort.InferenceSession.create('../models/silero_vad.onnx');
+  // This Worker has its own separate console from the main thread's, so
+  // main.js's own installDebugLogRelay('main') call never sees anything
+  // logged in here - see debug-log.js for why both realms need their own.
+  if (debugTelemetry) installDebugLogRelay('worker');
+  // Two SEPARATE sessions (same model file, loaded twice), NOT one shared
+  // between sourceVad and concealerVad - the two are called from genuinely
+  // independent, interleavable call chains (sourceVad every ~50ms from the
+  // real-time chunk loop; concealerVad in a burst from _feedMemory, which
+  // runs fire-and-forget alongside that same loop - see updateMemory), and
+  // sharing one InferenceSession's internal execution buffers/state across
+  // two logically-unrelated streams of calls is not a safe pattern for a
+  // stateful model. Confirmed the hard way: sourceVad detected speech
+  // correctly right up until the very first time concealerVad ever ran, then
+  // never detected anything again for the rest of the session, however long
+  // silence followed - a single shared session getting corrupted the first
+  // time both were in play at once explains that exactly.
+  const sourceVadSession = await ort.InferenceSession.create('../models/silero_vad.onnx');
+  const concealerVadSession = await ort.InferenceSession.create('../models/silero_vad.onnx');
 
-  sourceVad = new SileroVAD(vadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr });
-  const concealerVad = new SileroVAD(vadSession, { logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr });
+  sourceVad = new SileroVAD(sourceVadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr, name: 'source', debug: debugTelemetry });
+  const concealerVad = new SileroVAD(concealerVadSession, { logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr, name: 'concealer', debug: debugTelemetry });
   remoteDenoiser = cfg.denoiserEnabled ? new RemoteDenoiser() : null;
 
   const concealerConfig = {
@@ -65,8 +83,14 @@ async function init(cfg) {
     monitor_gain: cfg.monitorGain ?? 0.0,
     record_mic_gain: 1.0,
     conc_multiplier: cfg.concMultiplier ?? 1.0,
+    // Debug-only listen toggles (see docs/debug.html) - index.html has no UI
+    // for these, so they just stay at these defaults (concealer-only, same
+    // as production always sounded before this existed) for every real
+    // session.
+    listen_original: cfg.listenOriginal ?? false,
+    listen_concealer: cfg.listenConcealer ?? true,
   };
-  stream = new ConcealerStream(streamConfig, sourceVad, concealer);
+  stream = new ConcealerStream(streamConfig, sourceVad, concealer, debugTelemetry);
 
   postMessage({ type: 'ready' });
   startStatusLoop();
@@ -77,10 +101,17 @@ function startStatusLoop() {
   if (statusTimer) return;
   statusTimer = setInterval(() => {
     if (!concealer || !stream) return;
+    // DIAGNOSTIC (debug.html only) - kept in place, same reasoning as
+    // vad-silero.js's [VADDIAG]: this is what showed stopProcessing/
+    // pendingSpeechActive/the queue were all behaving correctly, isolating
+    // the shared-InferenceSession bug down to the VAD calls themselves.
+    if (debugTelemetry) {
+      console.error(`[ENGINEDIAG] processing=${processing} stopProcessing=${concealer.stopProcessing} pendingQueue.length=${pendingQueue.length} pendingSpeechActive=${concealer.pendingSpeechActive}`);
+    }
     const status = concealer.status();
     const timing = stream.popCallbackTiming();
     const debug = debugTelemetry
-      ? { voiceActive: stream.lastVoiceActivity, ...concealer.debugSnapshot() }
+      ? { voiceActive: stream.popVoiceActiveSincePoll(), ...concealer.debugSnapshot() }
       : undefined;
     postMessage({ type: 'status', status, timing, debug });
   }, 500);
@@ -170,6 +201,12 @@ self.onmessage = (event) => {
       break;
     case 'setConcMultiplier':
       if (stream) stream.streamConfig.conc_multiplier = msg.value;
+      break;
+    case 'setListenOriginal':
+      if (stream) stream.streamConfig.listen_original = msg.value;
+      break;
+    case 'setListenConcealer':
+      if (stream) stream.streamConfig.listen_concealer = msg.value;
       break;
     case 'setConcealingThreshold':
       if (sourceVad) sourceVad.logitThreshold = msg.value;
