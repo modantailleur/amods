@@ -80,7 +80,10 @@ async function init(cfg) {
     concealer_duration: 0.3,
     concealing_min_timeout_ratio: 0.6,
     concealing_max_timeout_ratio: 1.0,
-    fade_duration: 0.05,
+    // From the "Concealing smoothness" slider (see main.js's
+    // smoothnessToFadeDuration) - live-tunable via 'setFadeDuration' below,
+    // same as concealingThreshold/concealerMemoryThreshold.
+    fade_duration: cfg.fadeDuration ?? 0.05,
     is_stream: true,
     pending_conc_max_size: 3 * cfg.sr,
     freeze_learning: false,
@@ -312,6 +315,14 @@ self.onmessage = (event) => {
       break;
     case 'setConcealerMemoryThreshold':
       if (concealer) concealer.vad.logitThreshold = msg.value;
+      break;
+    case 'setFadeDuration':
+      // Only affects clips split off into memory AFTER this point (see
+      // _feedMemory's own fadeSize computation, read fresh from
+      // this.fadeDuration every cycle) - clips already stored keep whatever
+      // fade was baked into them when they were created, same as how
+      // concealerMemoryThreshold only affects future candidate filtering.
+      if (concealer) concealer.fadeDuration = msg.value;
       break;
     case 'reset':
       if (stream) stream.resetState();

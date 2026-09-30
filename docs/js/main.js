@@ -52,6 +52,8 @@ const els = {
   concealingRateValue: document.getElementById('concealing-rate-value'),
   concealerMemoryRate: document.getElementById('concealer-memory-rate'),
   concealerMemoryRateValue: document.getElementById('concealer-memory-rate-value'),
+  concealingSmoothness: document.getElementById('concealing-smoothness'),
+  concealingSmoothnessValue: document.getElementById('concealing-smoothness-value'),
   concLevel: document.getElementById('conc-level'),
   concLevelValue: document.getElementById('conc-level-value'),
   denoiserSelect: document.getElementById('denoiser-select'),
@@ -118,6 +120,16 @@ function purityToThreshold(rateStr) {
 
 function dbToMultiplier(dbStr) {
   return Math.pow(10, parseFloat(dbStr) / 20);
+}
+
+// "Concealing smoothness" is the fade-in/fade-out duration applied to every
+// concealer clip when it's split off and stored into memory (see
+// granspeechmask.js's _feedMemory) - a longer fade softens the clip's edges
+// more (smoother, but shaves more off the start/end), a shorter one leaves
+// them more abrupt. Maps the slider's 0..1 range onto 10ms..100ms in
+// seconds, matching GranSpeechMask's own fade_duration units.
+function smoothnessToFadeDuration(rateStr) {
+  return 0.01 + parseFloat(rateStr) * 0.09;
 }
 
 function levelFromRms(rms) {
@@ -517,6 +529,7 @@ async function ensureEngine() {
       denoiserEnabled: Boolean(denoiserPath),
       concealingThreshold: rateToThreshold(els.concealingRate.value),
       concealerMemoryThreshold: purityToThreshold(els.concealerMemoryRate.value),
+      fadeDuration: smoothnessToFadeDuration(els.concealingSmoothness.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
       // Full volume, not silenced - listenOriginal below is now what decides
       // whether the original mic signal is audible at all (see stream.js's
@@ -865,9 +878,9 @@ function setControlsEnabled(enabled) {
   els.denoiserSelect.disabled = !enabled;
   els.vadTypeSelect.disabled = !enabled; // same reasoning as denoiserSelect - the backend is fixed for a session's lifetime, no live-switching mid-session
   els.pingBtn.disabled = !enabled;
-  // Concealing rate, concealer memory rate, and concealer level stay
-  // enabled while running - they're live-adjustable (see the worker
-  // message handlers below), same as the Python GUI.
+  // Concealing rate, concealer memory rate, concealing smoothness, and
+  // concealer level stay enabled while running - they're live-adjustable
+  // (see the worker message handlers below), same as the Python GUI.
 }
 
 // ── Latency display: in + out + algo, mirrors amods.gui._refresh_status ──
@@ -1335,6 +1348,12 @@ els.concealerMemoryRate.addEventListener('input', () => {
   const threshold = purityToThreshold(els.concealerMemoryRate.value);
   els.concealerMemoryRateValue.textContent = els.concealerMemoryRate.value;
   if (worker && running) worker.postMessage({ type: 'setConcealerMemoryThreshold', value: threshold });
+});
+
+els.concealingSmoothness.addEventListener('input', () => {
+  const fadeDuration = smoothnessToFadeDuration(els.concealingSmoothness.value);
+  els.concealingSmoothnessValue.textContent = els.concealingSmoothness.value;
+  if (worker && running) worker.postMessage({ type: 'setFadeDuration', value: fadeDuration });
 });
 
 els.concLevel.addEventListener('input', () => {
