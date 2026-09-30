@@ -288,6 +288,12 @@ async function populateDevices() {
     els.status.textContent = `Microphone permission is required: ${e.message}`;
     return;
   }
+  // Preserve the current picks across a refresh (see the devicechange
+  // listener below) where possible - rebuilding the <select> options would
+  // otherwise silently reset back to whatever device happens to be first,
+  // even if the one the user had chosen is still available afterward.
+  const prevMic = els.micSelect.value;
+  const prevSpeaker = els.speakerSelect.value;
   const devices = await navigator.mediaDevices.enumerateDevices();
   els.micSelect.innerHTML = '';
   els.speakerSelect.innerHTML = '';
@@ -304,6 +310,8 @@ async function populateDevices() {
       els.speakerSelect.appendChild(opt);
     }
   }
+  if ([...els.micSelect.options].some((o) => o.value === prevMic)) els.micSelect.value = prevMic;
+  if ([...els.speakerSelect.options].some((o) => o.value === prevSpeaker)) els.speakerSelect.value = prevSpeaker;
   if (els.speakerSelect.length === 0) {
     els.outputSinkWarning.textContent =
       'This browser did not report any output devices separately (audiooutput enumeration/setSinkId support varies by browser) - audio will play on the system default speaker.';
@@ -311,6 +319,22 @@ async function populateDevices() {
   updateWarnings();
   startInputPreview();
 }
+
+// Re-list devices live when one connects/disconnects (e.g. Bluetooth
+// headphones pairing after the page is already open) - without this, the
+// dropdowns only ever reflect whatever was plugged in at page load, since
+// populateDevices() below otherwise only ever runs once. Some platforms
+// (notably Chrome on Android - see populateDevices' own audiooutput-warning
+// message above) only ever expose a single generic "Default" entry per kind
+// regardless of how many physical devices are actually connected, which is a
+// platform/browser limitation this listener can't work around - it only
+// helps when the browser WOULD have reported the device, just didn't know
+// about it yet.
+navigator.mediaDevices.addEventListener('devicechange', () => {
+  populateDevices().catch((e) => {
+    els.status.textContent = `Could not refresh audio devices: ${e.message}`;
+  });
+});
 
 // ── Model preload ─────────────────────────────────────────────────────────
 // Fetches every model file on page load purely to warm the browser's HTTP
