@@ -78,8 +78,11 @@ async function init(cfg) {
     max_countdown_reuse: 10,
     max_concealer_distance_to_buffer: 5,
     concealer_duration: 0.3,
-    concealing_min_timeout_ratio: 0.6,
-    concealing_max_timeout_ratio: 1.0,
+    // From the "Concealing overlap" slider's 3 discrete stops (see main.js's
+    // CONCEALING_OVERLAP_STOPS) - live-tunable via 'setConcealingOverlap'
+    // below, same as concealingThreshold/concealerMemoryThreshold.
+    concealing_min_timeout_ratio: cfg.concealingOverlapMinRatio ?? 0.6,
+    concealing_max_timeout_ratio: cfg.concealingOverlapMaxRatio ?? 1.0,
     // From the "Concealing smoothness" slider (see main.js's
     // smoothnessToFadeDuration) - live-tunable via 'setFadeDuration' below,
     // same as concealingThreshold/concealerMemoryThreshold.
@@ -323,6 +326,15 @@ self.onmessage = (event) => {
       // fade was baked into them when they were created, same as how
       // concealerMemoryThreshold only affects future candidate filtering.
       if (concealer) concealer.fadeDuration = msg.value;
+      break;
+    case 'setConcealingOverlap':
+      // Read live inside getConcealer() every time a clip is chosen (see
+      // its own concealingCountdown computation) - only affects the NEXT
+      // countdown roll, same "future only" caveat as the other live setters.
+      if (concealer) {
+        concealer.concealingMinTimeoutRatio = msg.minRatio;
+        concealer.concealingMaxTimeoutRatio = msg.maxRatio;
+      }
       break;
     case 'reset':
       if (stream) stream.resetState();

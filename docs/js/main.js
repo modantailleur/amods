@@ -54,6 +54,8 @@ const els = {
   concealerMemoryRateValue: document.getElementById('concealer-memory-rate-value'),
   concealingSmoothness: document.getElementById('concealing-smoothness'),
   concealingSmoothnessValue: document.getElementById('concealing-smoothness-value'),
+  concealingOverlap: document.getElementById('concealing-overlap'),
+  concealingOverlapValue: document.getElementById('concealing-overlap-value'),
   concLevel: document.getElementById('conc-level'),
   concLevelValue: document.getElementById('conc-level-value'),
   denoiserSelect: document.getElementById('denoiser-select'),
@@ -130,6 +132,38 @@ function dbToMultiplier(dbStr) {
 // seconds, matching GranSpeechMask's own fade_duration units.
 function smoothnessToFadeDuration(rateStr) {
   return 0.01 + parseFloat(rateStr) * 0.09;
+}
+
+// "Concealing overlap" has exactly 3 discrete stops (not a continuous
+// range) - each is the [min, max] ms window before a new concealer clip can
+// be selected after the previous one starts (see granspeechmask.js's
+// concealingMinTimeoutRatio/concealingMaxTimeoutRatio, read live inside
+// getConcealer() every time a clip is chosen). Lower stops let a new clip
+// start sooner, overlapping more with the previous one still playing out.
+// concealer_duration is a fixed 300ms for every clip (see worker-engine.js's
+// concealerConfig), so these line up on quarters of that: expressed as
+// ratios (the unit concealingMinTimeoutRatio/-MaxTimeoutRatio already use)
+// they're exactly 0.25/0.5, 0.5/0.75, 0.75/1.0.
+const CONCEALER_DURATION_MS = 300;
+// Ordered to match the slider left-to-right: position 1 (value 0) is the
+// LEAST overlap (225-300ms), position 3 (value 1) is the MOST (75-150ms).
+const CONCEALING_OVERLAP_STOPS = [
+  { minMs: 225, maxMs: 300 },
+  { minMs: 150, maxMs: 225 },
+  { minMs: 75, maxMs: 150 },
+];
+
+// The slider itself is a 0..1 range (step 0.5, matching the rest of the
+// concealer controls' 0..1 convention) rather than a raw 0/1/2 index - 0,
+// 0.5, and 1 map onto the 3 stops above.
+function overlapStop(rateStr) {
+  const index = Math.round(parseFloat(rateStr) * 2);
+  return CONCEALING_OVERLAP_STOPS[index] ?? CONCEALING_OVERLAP_STOPS[1];
+}
+
+function overlapStopRatios(rateStr) {
+  const stop = overlapStop(rateStr);
+  return { minRatio: stop.minMs / CONCEALER_DURATION_MS, maxRatio: stop.maxMs / CONCEALER_DURATION_MS };
 }
 
 function levelFromRms(rms) {
@@ -530,6 +564,8 @@ async function ensureEngine() {
       concealingThreshold: rateToThreshold(els.concealingRate.value),
       concealerMemoryThreshold: purityToThreshold(els.concealerMemoryRate.value),
       fadeDuration: smoothnessToFadeDuration(els.concealingSmoothness.value),
+      concealingOverlapMinRatio: overlapStopRatios(els.concealingOverlap.value).minRatio,
+      concealingOverlapMaxRatio: overlapStopRatios(els.concealingOverlap.value).maxRatio,
       concMultiplier: dbToMultiplier(els.concLevel.value),
       // Full volume, not silenced - listenOriginal below is now what decides
       // whether the original mic signal is audible at all (see stream.js's
@@ -878,9 +914,10 @@ function setControlsEnabled(enabled) {
   els.denoiserSelect.disabled = !enabled;
   els.vadTypeSelect.disabled = !enabled; // same reasoning as denoiserSelect - the backend is fixed for a session's lifetime, no live-switching mid-session
   els.pingBtn.disabled = !enabled;
-  // Concealing rate, concealer memory rate, concealing smoothness, and
-  // concealer level stay enabled while running - they're live-adjustable
-  // (see the worker message handlers below), same as the Python GUI.
+  // Concealing rate, concealer memory rate, concealing smoothness,
+  // concealing overlap, and concealer level stay enabled while running -
+  // they're live-adjustable (see the worker message handlers below), same
+  // as the Python GUI.
 }
 
 // ── Latency display: in + out + algo, mirrors amods.gui._refresh_status ──
@@ -1354,6 +1391,12 @@ els.concealingSmoothness.addEventListener('input', () => {
   const fadeDuration = smoothnessToFadeDuration(els.concealingSmoothness.value);
   els.concealingSmoothnessValue.textContent = els.concealingSmoothness.value;
   if (worker && running) worker.postMessage({ type: 'setFadeDuration', value: fadeDuration });
+});
+
+els.concealingOverlap.addEventListener('input', () => {
+  const { minRatio, maxRatio } = overlapStopRatios(els.concealingOverlap.value);
+  els.concealingOverlapValue.textContent = els.concealingOverlap.value;
+  if (worker && running) worker.postMessage({ type: 'setConcealingOverlap', minRatio, maxRatio });
 });
 
 els.concLevel.addEventListener('input', () => {
