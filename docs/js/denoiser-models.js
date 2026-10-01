@@ -17,4 +17,8 @@
 export const DENOISER_MODEL_PATHS = {
   original: '../models/dns64.onnx',
   int8: '../models/dns64.int8.float16conv.onnx',
+  // "FbdeDM" - the de-esser (see deesser.js) runs as a separate JS
+  // pre-processing step before denoising, not a different model, so it
+  // shares FbDM's own model file.
+  fbdedm: '../models/dns64.int8.float16conv.onnx',
 };

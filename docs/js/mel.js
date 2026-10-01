@@ -16,14 +16,14 @@ const N_MELS = 32;
 const FMIN = 100;
 const FMAX = 6000;
 
-function hannWindow(n) {
+export function hannWindow(n) {
   const w = new Float64Array(n);
   for (let i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1));
   return w;
 }
 
 /** In-place iterative radix-2 Cooley-Tukey FFT; re/im are Float64Array of length n (a power of 2). */
-function fft(re, im) {
+export function fft(re, im) {
   const n = re.length;
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;

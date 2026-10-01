@@ -92,6 +92,9 @@ async function init(cfg) {
     freeze_learning: false,
     decision_win: 0.3,
     denoise: cfg.denoiserEnabled,
+    // "FbdeDM" - see deesser.js; applied to the pendingVoice snapshot
+    // BEFORE denoising, inside _feedMemory.
+    de_ess: Boolean(cfg.deEsserEnabled),
   };
   concealer = new GranSpeechMask(cfg.sr, concealerConfig, { denoiser: remoteDenoiser, vad: concealerVad });
 

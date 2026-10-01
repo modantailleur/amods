@@ -1,0 +1,167 @@
+// Offline, non-causal split-band de-esser, prototyped and tuned in Python
+// against audios/test.wav (see conversation history - no script survives in
+// this repo, the parameters below are the result of that iteration) before
+// being ported here. Runs on the full ~2s pendingVoice snapshot GranSpeechMask
+// feeds into memory (see granspeechmask.js's _feedMemory), NOT on live
+// real-time audio - that's what makes the non-causal approach possible at
+// all: a real-time de-esser can only ever look a few ms ahead (lookahead
+// buffering), but this one sees the whole clip up front and can smooth its
+// detection symmetrically (forward AND backward in time), which is what a
+// tool like iZotope RX does and a live plugin cannot.
+//
+// Algorithm: take an STFT, measure energy in a "detect" band per frame
+// (6-18kHz - confirmed, by listening to the isolated removed content during
+// tuning, to reliably track genuine sibilant ("s"/"sh") moments), smooth that
+// curve symmetrically, gate it against a threshold computed from the clip's
+// OWN energy distribution (a percentile, not a hardcoded dB number - every
+// attempt at a fixed threshold during tuning needed re-guessing per
+// recording level), then attenuate a wider "suppress" band (3-18kHz - real
+// sibilant energy extends lower than the detect band alone, confirmed
+// during tuning that suppressing only 6-18kHz left an audible residual) by
+// up to a fixed dB amount wherever the gate is active. Reconstructed via
+// ISTFT (windowed overlap-add).
+import { fft, hannWindow } from './mel.js';
+
+const N_FFT = 512; // ~10.7ms at 48kHz - short enough to not blur a brief "s" together with the vowel/consonant next to it (a 2048-sample/~43ms window, tried first, smeared the two together)
+const HOP = 128; // 75% overlap, satisfies COLA with the Hann window used for both analysis and synthesis below
+const DETECT_BAND_HZ = [6000, 18000];
+const SUPPRESS_BAND_HZ = [3000, 18000];
+const THRESHOLD_PERCENTILE = 82;
+const MAX_REDUCTION_DB = 35;
+const SMOOTH_FRAMES = 2;
+const STEEPNESS = 1.5;
+
+/** In-place inverse FFT via the conjugate trick, reusing mel.js's forward fft(). */
+function ifft(re, im) {
+  const n = re.length;
+  for (let i = 0; i < n; i++) im[i] = -im[i];
+  fft(re, im);
+  for (let i = 0; i < n; i++) {
+    re[i] /= n;
+    im[i] = -im[i] / n;
+  }
+}
+
+/** x: Float32Array/Float64Array. Returns an array of {re, im} Float64Array(nFft) frames. */
+function stft(x, nFft, hop) {
+  const window = hannWindow(nFft);
+  const nFrames = Math.max(1, Math.floor(Math.max(0, x.length - nFft) / hop) + 1);
+  const frames = new Array(nFrames);
+  for (let t = 0; t < nFrames; t++) {
+    const start = t * hop;
+    const re = new Float64Array(nFft);
+    const im = new Float64Array(nFft);
+    for (let i = 0; i < nFft; i++) {
+      const s = start + i < x.length ? x[start + i] : 0;
+      re[i] = s * window[i];
+    }
+    fft(re, im);
+    frames[t] = { re, im };
+  }
+  return frames;
+}
+
+/** Weighted overlap-add reconstruction - window applied at both analysis and
+ * synthesis, normalized by the sum of window^2, which is self-correcting for
+ * COLA rather than relying on an exact window/hop combination. */
+function istft(frames, nFft, hop, outLength) {
+  const window = hannWindow(nFft);
+  const out = new Float64Array(outLength);
+  const normSum = new Float64Array(outLength);
+  const reBuf = new Float64Array(nFft);
+  const imBuf = new Float64Array(nFft);
+  for (let t = 0; t < frames.length; t++) {
+    reBuf.set(frames[t].re);
+    imBuf.set(frames[t].im);
+    ifft(reBuf, imBuf);
+    const start = t * hop;
+    for (let i = 0; i < nFft; i++) {
+      const idx = start + i;
+      if (idx >= outLength) break;
+      out[idx] += reBuf[i] * window[i];
+      normSum[idx] += window[i] * window[i];
+    }
+  }
+  for (let i = 0; i < outLength; i++) out[i] = normSum[i] > 1e-10 ? out[i] / normSum[i] : 0;
+  return out;
+}
+
+/** Bin k's represented frequency, folding the upper (mirror/negative-frequency) half back onto the positive range - fft()'s output is a full nFft-length conjugate-symmetric spectrum, not an rfft. */
+function binFreqHz(k, nFft, sr) {
+  const kEff = k <= nFft / 2 ? k : nFft - k;
+  return (kEff * sr) / nFft;
+}
+
+/** Linear-interpolated percentile, matching numpy's default. */
+function percentile(sortedArr, p) {
+  const n = sortedArr.length;
+  if (n === 0) return 0;
+  if (n === 1) return sortedArr[0];
+  const idx = (p / 100) * (n - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sortedArr[lo];
+  return sortedArr[lo] + (sortedArr[hi] - sortedArr[lo]) * (idx - lo);
+}
+
+/**
+ * x: Float32Array of audio in [-1, 1] at sr. Returns a new Float32Array of
+ * the same length with sibilant moments suppressed. Intended to run once,
+ * on a whole known clip, before denoising (see worker-engine.js's FbdeDM
+ * option) - NOT per real-time chunk.
+ */
+export function deEss(x, sr) {
+  const frames = stft(x, N_FFT, HOP);
+  const nFrames = frames.length;
+
+  const detectIdx = new Uint8Array(N_FFT);
+  const suppressIdx = new Uint8Array(N_FFT);
+  for (let k = 0; k < N_FFT; k++) {
+    const fHz = binFreqHz(k, N_FFT, sr);
+    detectIdx[k] = fHz >= DETECT_BAND_HZ[0] && fHz <= DETECT_BAND_HZ[1] ? 1 : 0;
+    suppressIdx[k] = fHz >= SUPPRESS_BAND_HZ[0] && fHz <= SUPPRESS_BAND_HZ[1] ? 1 : 0;
+  }
+
+  const bandDb = new Float64Array(nFrames);
+  for (let t = 0; t < nFrames; t++) {
+    const { re, im } = frames[t];
+    let energy = 0;
+    for (let k = 0; k < N_FFT; k++) {
+      if (detectIdx[k]) energy += re[k] * re[k] + im[k] * im[k];
+    }
+    bandDb[t] = 10 * Math.log10(energy + 1e-15);
+  }
+
+  const thresholdDb = percentile(Float64Array.from(bandDb).sort(), THRESHOLD_PERCENTILE);
+
+  // Symmetric (non-causal) smoothing - a centered moving average, valid
+  // only because the whole clip is already known; edges clamp to the
+  // nearest in-range frame rather than zero-padding.
+  const half = Math.floor(SMOOTH_FRAMES / 2);
+  const smoothed = new Float64Array(nFrames);
+  for (let t = 0; t < nFrames; t++) {
+    let sum = 0;
+    let count = 0;
+    for (let d = -half; d <= SMOOTH_FRAMES - 1 - half; d++) {
+      const idx = Math.max(0, Math.min(nFrames - 1, t + d));
+      sum += bandDb[idx];
+      count++;
+    }
+    smoothed[t] = sum / count;
+  }
+
+  for (let t = 0; t < nFrames; t++) {
+    const gate = 1 / (1 + Math.exp(-(smoothed[t] - thresholdDb) * STEEPNESS));
+    const gainLin = 10 ** ((-gate * MAX_REDUCTION_DB) / 20);
+    const { re, im } = frames[t];
+    for (let k = 0; k < N_FFT; k++) {
+      if (suppressIdx[k]) {
+        re[k] *= gainLin;
+        im[k] *= gainLin;
+      }
+    }
+  }
+
+  const out = istft(frames, N_FFT, HOP, x.length);
+  return Float32Array.from(out);
+}

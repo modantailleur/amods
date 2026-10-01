@@ -561,6 +561,10 @@ async function ensureEngine() {
       sr,
       vadType: els.vadTypeSelect.value, // 'ten' (default) or 'silero' - see worker-engine.js's init()
       denoiserEnabled: Boolean(denoiserPath),
+      // "FbdeDM" - same FbDM model as the plain denoiser option (see
+      // denoiser-models.js), plus the de-esser pre-processing step (see
+      // deesser.js), run first in granspeechmask.js's _feedMemory.
+      deEsserEnabled: els.denoiserSelect.value === 'fbdedm',
       concealingThreshold: rateToThreshold(els.concealingRate.value),
       concealerMemoryThreshold: purityToThreshold(els.concealerMemoryRate.value),
       fadeDuration: smoothnessToFadeDuration(els.concealingSmoothness.value),

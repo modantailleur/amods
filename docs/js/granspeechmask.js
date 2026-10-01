@@ -14,6 +14,7 @@
 // _compute_swap_marginal_gain/_compute_correlation_matrix at that point.
 import { applyFade } from './audio-utils.js';
 import { featureExtractor } from './mel.js';
+import { deEss } from './deesser.js';
 
 export class GranSpeechMask {
   /**
@@ -40,6 +41,7 @@ export class GranSpeechMask {
     this.freezeLearning = config.freeze_learning ?? false;
     this.decisionWin = config.decision_win ?? 0.3;
     this.denoise = config.denoise ?? true;
+    this.deEss = config.de_ess ?? false; // "FbdeDM" - see deesser.js, applied before denoising below
 
     this.concealerSize = Math.trunc(sr * this.concealerDuration);
     this.fadeSize = Math.trunc(sr * this.fadeDuration);
@@ -316,12 +318,23 @@ export class GranSpeechMask {
     this._healthFeedCycles += 1;
     try {
       const newMemory = [];
-      let denoised = y;
+      // "FbdeDM" - de-ess BEFORE denoising, not the other way around: the
+      // de-esser's own tuning (see deesser.js's header comment) was
+      // validated against RAW, undenoised audio, where genuine sibilant
+      // energy is still intact in the 6-18kHz range it detects on - FbDM's
+      // own denoising was found to destroy almost everything above ~8kHz,
+      // which silently defeats a de-esser applied after it. Only affects
+      // what gets STORED/played back (`dsp`/`denoised` below) - feature
+      // extraction further down still matches against the pristine `y`,
+      // same as denoising already did before this was added.
+      let dsp = y;
+      if (this.deEss) dsp = deEss(y, this.sr);
+      let denoised = dsp;
       if (this.denoise && this.denoiser) {
         this.denoiseRunning = true; // debug-visualization only - see debugSnapshot()
         const denoiseStartedAt = performance.now();
         try {
-          denoised = await this.denoiser.predict(y);
+          denoised = await this.denoiser.predict(dsp);
           if (denoised.length > y.length) denoised = denoised.subarray(0, y.length);
           else if (denoised.length < y.length) {
             const padded = new Float32Array(y.length);
