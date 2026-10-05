@@ -58,6 +58,8 @@ const els = {
   concealingOverlapValue: document.getElementById('concealing-overlap-value'),
   concealingNoise: document.getElementById('concealing-noise'),
   concealingNoiseValue: document.getElementById('concealing-noise-value'),
+  concealingNoiseSensitivity: document.getElementById('concealing-noise-sensitivity'),
+  concealingNoiseSensitivityValue: document.getElementById('concealing-noise-sensitivity-value'),
   concLevel: document.getElementById('conc-level'),
   concLevelValue: document.getElementById('conc-level-value'),
   denoiserSelect: document.getElementById('denoiser-select'),
@@ -134,6 +136,25 @@ function dbToMultiplier(dbStr) {
 // seconds, matching GranSpeechMask's own fade_duration units.
 function smoothnessToFadeDuration(rateStr) {
   return 0.01 + parseFloat(rateStr) * 0.09;
+}
+
+// "Sensitivity" (the SpeechShapedNoise background bed's EMA time constant
+// - see speech-shaped-noise.js's SpeechShapedNoise.setSensitivitySeconds)
+// is a 0..1 slider like the others, higher = more sensitive/reactive -
+// maps onto 10s (slider 0, slowest/least reactive) down to 0.2s (slider
+// 1, fastest/most reactive), inverted from the underlying seconds value.
+function sensitivityToSeconds(rateStr) {
+  return 10 - parseFloat(rateStr) * 9.8;
+}
+
+// "Noise" slider stays 0..1 in the UI like the others, but the ACTUAL
+// gain it drives (concealing_noise_level, see stream.js's noiseGain) goes
+// up to NOISE_LEVEL_MAX_GAIN - raise/lower this one constant to change how
+// loud the slider's top end gets, without touching the slider's own
+// min/max/step in the HTML.
+const NOISE_LEVEL_MAX_GAIN = 3;
+function noiseSliderToLevel(rateStr) {
+  return parseFloat(rateStr) * NOISE_LEVEL_MAX_GAIN;
 }
 
 // "Concealing overlap" has exactly 3 discrete stops (not a continuous
@@ -572,7 +593,13 @@ async function ensureEngine() {
       fadeDuration: smoothnessToFadeDuration(els.concealingSmoothness.value),
       concealingOverlapMinRatio: overlapStopRatios(els.concealingOverlap.value).minRatio,
       concealingOverlapMaxRatio: overlapStopRatios(els.concealingOverlap.value).maxRatio,
-      concealingNoise: parseFloat(els.concealingNoise.value),
+      // The "Concealing noise" background bed (see speech-shaped-noise.js)
+      // - level 0-1, and its own texture-window "sensitivity" in seconds.
+      // Also scaled by concMultiplier below, in stream.js, per explicit
+      // request that the "Concealer level" fader govern both this and the
+      // normal concealer clips together.
+      concealingNoiseLevel: noiseSliderToLevel(els.concealingNoise.value),
+      concealingNoiseSensitivity: sensitivityToSeconds(els.concealingNoiseSensitivity.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
       // Full volume, not silenced - listenOriginal below is now what decides
       // whether the original mic signal is audible at all (see stream.js's
@@ -1407,9 +1434,15 @@ els.concealingOverlap.addEventListener('input', () => {
 });
 
 els.concealingNoise.addEventListener('input', () => {
-  const value = parseFloat(els.concealingNoise.value);
+  const value = noiseSliderToLevel(els.concealingNoise.value);
   els.concealingNoiseValue.textContent = els.concealingNoise.value;
-  if (worker && running) worker.postMessage({ type: 'setConcealingNoise', value });
+  if (worker && running) worker.postMessage({ type: 'setConcealingNoiseLevel', value });
+});
+
+els.concealingNoiseSensitivity.addEventListener('input', () => {
+  const value = sensitivityToSeconds(els.concealingNoiseSensitivity.value);
+  els.concealingNoiseSensitivityValue.textContent = els.concealingNoiseSensitivity.value;
+  if (worker && running) worker.postMessage({ type: 'setConcealingNoiseSensitivity', value });
 });
 
 els.concLevel.addEventListener('input', () => {

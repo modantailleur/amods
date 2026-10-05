@@ -95,11 +95,12 @@ async function init(cfg) {
     // "FbdeDM" - see deesser.js; applied to the pendingVoice snapshot
     // BEFORE denoising, inside _feedMemory.
     de_ess: Boolean(cfg.deEsserEnabled),
-    // From the "Concealing noise" slider (see concealer-noise.js) -
-    // live-tunable via 'setConcealingNoise' below. Applied to candidates
-    // AFTER they pass the memory branch's own VAD check, right before
-    // being stored.
-    concealing_noise: cfg.concealingNoise ?? 0,
+    // concealing_noise (concealer-noise.js's per-clip blur/noiseShape) is
+    // deliberately left unset here (defaults to 0 inside GranSpeechMask) -
+    // that was a misreading of what "concealing noise" was meant to be; the
+    // real feature is the ConcealerStream-level background bed below
+    // (concealing_noise_level/_sensitivity in streamConfig, see
+    // speech-shaped-noise.js). The old code stays in the repo, unreachable.
   };
   concealer = new GranSpeechMask(cfg.sr, concealerConfig, { denoiser: remoteDenoiser, vad: concealerVad });
 
@@ -123,6 +124,13 @@ async function init(cfg) {
     monitor_gain: cfg.monitorGain ?? 0.0,
     record_mic_gain: 1.0,
     conc_multiplier: cfg.concMultiplier ?? 1.0,
+    // "Noise controls" panel's background bed (see speech-shaped-noise.js)
+    // - level (0-1, "Noise" slider) and the EMA time constant in seconds
+    // that the "Sensitivity" slider sets (how far back the noise's
+    // spectral envelope remembers - NOT a buffer size). Both live-tunable
+    // via 'setConcealingNoiseLevel'/'setConcealingNoiseSensitivity' below.
+    concealing_noise_level: cfg.concealingNoiseLevel ?? 0,
+    concealing_noise_sensitivity: cfg.concealingNoiseSensitivity ?? 2,
     // Debug-only listen toggles (see docs/debug.html) - index.html has no UI
     // for these, so they just stay at these defaults (concealer-only, same
     // as production always sounded before this existed) for every real
@@ -345,10 +353,28 @@ self.onmessage = (event) => {
       }
       break;
     case 'setConcealingNoise':
-      // Only affects clips blurred AFTER this point (see _feedMemory's own
-      // blurConcealer call, read fresh from this.concealingNoise every
-      // cycle) - same "future only" caveat as the other live setters.
+      // Dead code - the per-clip blur/noiseShape feature this drove
+      // (concealer-noise.js) was a misreading of what "concealing noise"
+      // was meant to be. No longer sent by main.js; left in place rather
+      // than removed (see concealerConfig's own comment in init() above).
       if (concealer) concealer.concealingNoise = msg.value;
+      break;
+    case 'setConcealingNoiseLevel':
+      // The REAL "Concealing noise" slider, now driving the
+      // ConcealerStream-level background bed (see speech-shaped-noise.js) -
+      // applied live, every chunk, in stream.js's processChunk, so this
+      // takes effect immediately (unlike most of the other live setters
+      // here, which only affect future clips/cycles).
+      if (stream) stream.streamConfig.concealing_noise_level = msg.value;
+      break;
+    case 'setConcealingNoiseSensitivity':
+      // The "Sensitivity" slider - the EMA time constant (seconds, 0.2-10,
+      // clamped inside SpeechShapedNoise.setSensitivitySeconds) that
+      // controls how far back the noise's spectral envelope remembers, NOT
+      // a buffer size (see speech-shaped-noise.js's header for why) - takes
+      // effect immediately, with no glitch, since it only changes a scalar
+      // smoothing factor rather than resizing/resetting anything.
+      if (stream) stream.ssn.setSensitivitySeconds(msg.value);
       break;
     case 'reset':
       if (stream) stream.resetState();
