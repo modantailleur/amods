@@ -56,6 +56,8 @@ const els = {
   concealingSmoothnessValue: document.getElementById('concealing-smoothness-value'),
   concealingOverlap: document.getElementById('concealing-overlap'),
   concealingOverlapValue: document.getElementById('concealing-overlap-value'),
+  concealingNoise: document.getElementById('concealing-noise'),
+  concealingNoiseValue: document.getElementById('concealing-noise-value'),
   concLevel: document.getElementById('conc-level'),
   concLevelValue: document.getElementById('conc-level-value'),
   denoiserSelect: document.getElementById('denoiser-select'),
@@ -570,6 +572,7 @@ async function ensureEngine() {
       fadeDuration: smoothnessToFadeDuration(els.concealingSmoothness.value),
       concealingOverlapMinRatio: overlapStopRatios(els.concealingOverlap.value).minRatio,
       concealingOverlapMaxRatio: overlapStopRatios(els.concealingOverlap.value).maxRatio,
+      concealingNoise: parseFloat(els.concealingNoise.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
       // Full volume, not silenced - listenOriginal below is now what decides
       // whether the original mic signal is audible at all (see stream.js's
@@ -919,9 +922,9 @@ function setControlsEnabled(enabled) {
   els.vadTypeSelect.disabled = !enabled; // same reasoning as denoiserSelect - the backend is fixed for a session's lifetime, no live-switching mid-session
   els.pingBtn.disabled = !enabled;
   // Concealing rate, concealer memory rate, concealing smoothness,
-  // concealing overlap, and concealer level stay enabled while running -
-  // they're live-adjustable (see the worker message handlers below), same
-  // as the Python GUI.
+  // concealing overlap, concealing noise, and concealer level stay enabled
+  // while running - they're live-adjustable (see the worker message
+  // handlers below), same as the Python GUI.
 }
 
 // ── Latency display: in + out + algo, mirrors amods.gui._refresh_status ──
@@ -1401,6 +1404,12 @@ els.concealingOverlap.addEventListener('input', () => {
   const { minRatio, maxRatio } = overlapStopRatios(els.concealingOverlap.value);
   els.concealingOverlapValue.textContent = els.concealingOverlap.value;
   if (worker && running) worker.postMessage({ type: 'setConcealingOverlap', minRatio, maxRatio });
+});
+
+els.concealingNoise.addEventListener('input', () => {
+  const value = parseFloat(els.concealingNoise.value);
+  els.concealingNoiseValue.textContent = els.concealingNoise.value;
+  if (worker && running) worker.postMessage({ type: 'setConcealingNoise', value });
 });
 
 els.concLevel.addEventListener('input', () => {

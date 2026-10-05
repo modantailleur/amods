@@ -15,6 +15,7 @@
 import { applyFade } from './audio-utils.js';
 import { featureExtractor } from './mel.js';
 import { deEss } from './deesser.js';
+import { blurConcealer } from './concealer-noise.js';
 
 export class GranSpeechMask {
   /**
@@ -42,6 +43,7 @@ export class GranSpeechMask {
     this.decisionWin = config.decision_win ?? 0.3;
     this.denoise = config.denoise ?? true;
     this.deEss = config.de_ess ?? false; // "FbdeDM" - see deesser.js, applied before denoising below
+    this.concealingNoise = config.concealing_noise ?? 0; // see concealer-noise.js, applied after the VAD pass below, before storing
 
     this.concealerSize = Math.trunc(sr * this.concealerDuration);
     this.fadeSize = Math.trunc(sr * this.fadeDuration);
@@ -380,7 +382,11 @@ export class GranSpeechMask {
         this._healthCandidatesTotal += 1;
         if (passed) {
           this._healthCandidatesPassed += 1;
-          newMemory.push({ clip: Float32Array.from(clip), feat, cooldown: 0, voiceName });
+          // "Concealing noise" - only applied to what's actually stored, AFTER
+          // the VAD decision above (which still sees the clean, unblurred
+          // clip) - see concealer-noise.js.
+          const stored = this.concealingNoise > 0 ? blurConcealer(clip, this.sr, this.concealingNoise) : clip;
+          newMemory.push({ clip: Float32Array.from(stored), feat, cooldown: 0, voiceName });
         }
         start = end;
       }

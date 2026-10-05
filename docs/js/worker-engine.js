@@ -95,6 +95,11 @@ async function init(cfg) {
     // "FbdeDM" - see deesser.js; applied to the pendingVoice snapshot
     // BEFORE denoising, inside _feedMemory.
     de_ess: Boolean(cfg.deEsserEnabled),
+    // From the "Concealing noise" slider (see concealer-noise.js) -
+    // live-tunable via 'setConcealingNoise' below. Applied to candidates
+    // AFTER they pass the memory branch's own VAD check, right before
+    // being stored.
+    concealing_noise: cfg.concealingNoise ?? 0,
   };
   concealer = new GranSpeechMask(cfg.sr, concealerConfig, { denoiser: remoteDenoiser, vad: concealerVad });
 
@@ -338,6 +343,12 @@ self.onmessage = (event) => {
         concealer.concealingMinTimeoutRatio = msg.minRatio;
         concealer.concealingMaxTimeoutRatio = msg.maxRatio;
       }
+      break;
+    case 'setConcealingNoise':
+      // Only affects clips blurred AFTER this point (see _feedMemory's own
+      // blurConcealer call, read fresh from this.concealingNoise every
+      // cycle) - same "future only" caveat as the other live setters.
+      if (concealer) concealer.concealingNoise = msg.value;
       break;
     case 'reset':
       if (stream) stream.resetState();
