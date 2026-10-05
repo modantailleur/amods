@@ -3,10 +3,11 @@
 // inlined here rather than ported as its own abstraction.
 import { limitPeak } from './audio-utils.js';
 import { SpeechShapedNoise } from './speech-shaped-noise.js';
+import { WhiteNoiseGenerator, PinkNoiseGenerator } from './noise-generators.js';
 
 export class ConcealerStream {
   /**
-   * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity }
+   * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_type }
    * @param {SileroVAD} sourceVad - the real-time "is speech happening now" VAD (distinct from concealer.vad).
    * @param {GranSpeechMask} concealer
    * @param {boolean} debug - debug.html's debugTelemetry flag; gates [STREAMDIAG] logging below (see worker-engine.js)
@@ -24,8 +25,18 @@ export class ConcealerStream {
 
     // "Concealing noise" background bed - see speech-shaped-noise.js's own
     // header for why this is a separate, always-running additive layer
-    // rather than anything living inside GranSpeechMask.
-    this.ssn = new SpeechShapedNoise(streamConfig.sr, streamConfig.concealing_noise_sensitivity ?? 2);
+    // rather than anything living inside GranSpeechMask. Three
+    // alternative noise colors share the same {reset, feed, nextBlock}
+    // interface (see noise-generators.js) - all three are held so
+    // switching the "Noise controls" dropdown is instant (no
+    // re-construction), but only the currently selected one (this.noiseType)
+    // is ever fed/ticked each chunk - see processChunk and setNoiseType.
+    this.noiseGenerators = {
+      speechShaped: new SpeechShapedNoise(streamConfig.sr, streamConfig.concealing_noise_sensitivity ?? 2),
+      white: new WhiteNoiseGenerator(streamConfig.sr),
+      pink: new PinkNoiseGenerator(streamConfig.sr),
+    };
+    this.noiseType = streamConfig.noise_type ?? 'speechShaped';
 
     // Timing stats, mirrors Stream._record_callback_timing/pop_callback_timing.
     this._callbackMsSum = 0;
@@ -55,7 +66,14 @@ export class ConcealerStream {
     this.pendingConc = new Float32Array(this.pendingConcMaxSize);
     this._playMixGain = 1.0;
     this._recMixGain = 1.0;
-    this.ssn.reset();
+    for (const gen of Object.values(this.noiseGenerators)) gen.reset();
+  }
+
+  /** Switches the active noise color (see processChunk) and resets its state, so reactivating one that's been idle doesn't play back stale/minutes-old content. */
+  setNoiseType(type) {
+    if (!this.noiseGenerators[type]) return;
+    this.noiseType = type;
+    this.noiseGenerators[type].reset();
   }
 
   /**
@@ -81,10 +99,12 @@ export class ConcealerStream {
     }
 
     // Fed unconditionally, every chunk, regardless of voice activity or
-    // concealing state - this is the "texture" the background noise bed is
-    // shaped from (see speech-shaped-noise.js), a completely separate
-    // concern from GranSpeechMask's own pendingVoice/VAD/memory below.
-    this.ssn.feed(x);
+    // concealing state - for SpeechShapedNoise this is the "texture" the
+    // background noise bed is shaped from, a completely separate concern
+    // from GranSpeechMask's own pendingVoice/VAD/memory below. White/pink
+    // noise ignore it (see noise-generators.js) but share the same call.
+    const activeNoise = this.noiseGenerators[this.noiseType] ?? this.noiseGenerators.speechShaped;
+    activeNoise.feed(x);
 
     const voiceActivity = await this.sourceVad.predict(x); // forecast === x (identity forecaster)
     this.lastVoiceActivity = voiceActivity;
@@ -143,7 +163,7 @@ export class ConcealerStream {
     // conc_multiplier is the SAME "Concealer level" dB fader concBlock's
     // own mult already used above, per explicit request that one control
     // governs both.
-    const noiseBlock = this.ssn.nextBlock(frames);
+    const noiseBlock = activeNoise.nextBlock(frames);
     const noiseGain = (this.streamConfig.concealing_noise_level ?? 0) * this.streamConfig.conc_multiplier;
 
     const playSum = new Float32Array(frames);

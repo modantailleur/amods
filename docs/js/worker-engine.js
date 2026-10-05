@@ -124,13 +124,19 @@ async function init(cfg) {
     monitor_gain: cfg.monitorGain ?? 0.0,
     record_mic_gain: 1.0,
     conc_multiplier: cfg.concMultiplier ?? 1.0,
-    // "Noise controls" panel's background bed (see speech-shaped-noise.js)
-    // - level (0-1, "Noise" slider) and the EMA time constant in seconds
-    // that the "Sensitivity" slider sets (how far back the noise's
-    // spectral envelope remembers - NOT a buffer size). Both live-tunable
-    // via 'setConcealingNoiseLevel'/'setConcealingNoiseSensitivity' below.
+    // "Noise controls" panel's background bed - level (0-1 mapped to
+    // 0-NOISE_LEVEL_MAX_GAIN, see main.js's noiseSliderToLevel, "Noise"
+    // slider), the EMA time constant in seconds that the "Sensitivity"
+    // slider sets for the speech-shaped color specifically (how far back
+    // its spectral envelope remembers - NOT a buffer size, and unused by
+    // white/pink), and which of the three colors (see noise-generators.js
+    // and speech-shaped-noise.js) is active - see ConcealerStream's own
+    // noiseGenerators/noiseType. All three live-tunable via
+    // 'setConcealingNoiseLevel'/'setConcealingNoiseSensitivity'/
+    // 'setConcealingNoiseType' below.
     concealing_noise_level: cfg.concealingNoiseLevel ?? 0,
     concealing_noise_sensitivity: cfg.concealingNoiseSensitivity ?? 2,
+    noise_type: cfg.noiseType ?? 'speechShaped',
     // Debug-only listen toggles (see docs/debug.html) - index.html has no UI
     // for these, so they just stay at these defaults (concealer-only, same
     // as production always sounded before this existed) for every real
@@ -373,8 +379,18 @@ self.onmessage = (event) => {
       // controls how far back the noise's spectral envelope remembers, NOT
       // a buffer size (see speech-shaped-noise.js's header for why) - takes
       // effect immediately, with no glitch, since it only changes a scalar
-      // smoothing factor rather than resizing/resetting anything.
-      if (stream) stream.ssn.setSensitivitySeconds(msg.value);
+      // smoothing factor rather than resizing/resetting anything. Only
+      // the speech-shaped generator has this - unused by white/pink, but
+      // harmless to set regardless (they just never read it).
+      if (stream) stream.noiseGenerators.speechShaped.setSensitivitySeconds(msg.value);
+      break;
+    case 'setConcealingNoiseType':
+      // "Noise controls" panel's color dropdown (speechShaped/white/pink
+      // - see noise-generators.js and speech-shaped-noise.js). Resets the
+      // newly-active generator's state (see ConcealerStream.setNoiseType)
+      // so switching back to one that's been idle doesn't play back
+      // stale/minutes-old content.
+      if (stream) stream.setNoiseType(msg.value);
       break;
     case 'reset':
       if (stream) stream.resetState();

@@ -56,6 +56,7 @@ const els = {
   concealingSmoothnessValue: document.getElementById('concealing-smoothness-value'),
   concealingOverlap: document.getElementById('concealing-overlap'),
   concealingOverlapValue: document.getElementById('concealing-overlap-value'),
+  noiseTypeSelect: document.getElementById('noise-type-select'),
   concealingNoise: document.getElementById('concealing-noise'),
   concealingNoiseValue: document.getElementById('concealing-noise-value'),
   concealingNoiseSensitivity: document.getElementById('concealing-noise-sensitivity'),
@@ -593,11 +594,14 @@ async function ensureEngine() {
       fadeDuration: smoothnessToFadeDuration(els.concealingSmoothness.value),
       concealingOverlapMinRatio: overlapStopRatios(els.concealingOverlap.value).minRatio,
       concealingOverlapMaxRatio: overlapStopRatios(els.concealingOverlap.value).maxRatio,
-      // The "Concealing noise" background bed (see speech-shaped-noise.js)
-      // - level 0-1, and its own texture-window "sensitivity" in seconds.
-      // Also scaled by concMultiplier below, in stream.js, per explicit
+      // The "Noise controls" background bed - which color (see
+      // noise-generators.js/speech-shaped-noise.js), level 0-1 (mapped to
+      // 0-NOISE_LEVEL_MAX_GAIN), and the speech-shaped color's own
+      // "sensitivity" in seconds (unused by white/pink). Level is also
+      // scaled by concMultiplier below, in stream.js, per explicit
       // request that the "Concealer level" fader govern both this and the
       // normal concealer clips together.
+      noiseType: els.noiseTypeSelect.value,
       concealingNoiseLevel: noiseSliderToLevel(els.concealingNoise.value),
       concealingNoiseSensitivity: sensitivityToSeconds(els.concealingNoiseSensitivity.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
@@ -1443,6 +1447,10 @@ els.concealingNoiseSensitivity.addEventListener('input', () => {
   const value = sensitivityToSeconds(els.concealingNoiseSensitivity.value);
   els.concealingNoiseSensitivityValue.textContent = els.concealingNoiseSensitivity.value;
   if (worker && running) worker.postMessage({ type: 'setConcealingNoiseSensitivity', value });
+});
+
+els.noiseTypeSelect.addEventListener('change', () => {
+  if (worker && running) worker.postMessage({ type: 'setConcealingNoiseType', value: els.noiseTypeSelect.value });
 });
 
 els.concLevel.addEventListener('input', () => {
