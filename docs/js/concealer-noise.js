@@ -8,9 +8,13 @@
 // 'blur' (blurConcealer) - a 2D Gaussian blur across the STFT's time and
 // frequency axes, per this project's advisor. Implemented as a SEPARABLE
 // Gaussian (1D blur along frequency, then along time - equivalent to full
-// 2D, far cheaper). Phase is left untouched; only magnitude is blurred.
-// Sounded "vocoded" in practice - the fine harmonic structure survives,
-// just smeared, so it still reads as a (blurry) voice.
+// 2D, far cheaper). On its own, blurring magnitude alone sounded "vocoded"
+// - the fine harmonic structure survives the blur (just smeared), and
+// phase was left completely untouched, so the exact pitch-period timing
+// that makes something sound voiced came through regardless. Phase
+// randomization (crossfaded in by intensity, same mechanism as
+// noiseShapeConcealer below) is layered on top of that to address exactly
+// that: at intensity 1, both the blur AND the phase are fully replaced.
 //
 // 'noiseShape' (noiseShapeConcealer) - closer to what's called
 // "noise-vocoded speech" in psychoacoustics research: keep the clip's
@@ -19,7 +23,7 @@
 // with random phase. The envelope/"shape" survives; the harmonic/tonal
 // fine structure that makes something sound voiced does not - the result
 // is textured, noise-like, but dynamically follows the original speech.
-const CONCEALING_NOISE_MODE = 'noiseShape'; // 'blur' | 'noiseShape' - the one variable to flip to switch techniques
+const CONCEALING_NOISE_MODE = 'blur'; // 'blur' | 'noiseShape' - the one variable to flip to switch techniques
 import { fft, hannWindow } from './mel.js';
 import { istft } from './stft.js';
 
@@ -35,8 +39,8 @@ const BLUR_HOP = 512;
 // enough to blur formant/transient structure without erasing the whole
 // spectral envelope outright. Treat these as a starting point to validate
 // by ear, not a settled answer.
-const MAX_FREQ_SIGMA_BINS = 128;
-const MAX_TIME_SIGMA_FRAMES = 4;
+const MAX_FREQ_SIGMA_BINS = 8;
+const MAX_TIME_SIGMA_FRAMES = 2;
 
 // noiseShapeConcealer's own STFT config - deliberately BIGGER than the
 // blur's, by explicit request: a bigger window gives finer frequency
@@ -58,6 +62,31 @@ const NOISE_SHAPE_HOP = 1024; // keeps the same hop/window ratio (COLA) as the b
 // (several hundred Hz to over 1kHz) so broad spectral coloring survives.
 // Not tuned by listening (same caveat as MAX_FREQ_SIGMA_BINS above).
 const ENVELOPE_SMOOTH_SIGMA_BINS = 40;
+
+/**
+ * Pads x with padLen samples of MIRROR-reflected content on each side
+ * (reflecting around each edge, not repeating the edge sample itself - same
+ * "reflect" convention as convolveFreqAxisHalf's boundary, just in the time
+ * domain here), rather than silence. Used so blurConcealerWithSigmas' time
+ * blur has real, representative content to blend with near a clip's edges
+ * instead of diluting toward manufactured silence - a 300ms clip's edges
+ * are well within one kernel-width of the boundary at high time-sigma, so
+ * this isn't a negligible corner case. Assumes x.length >= padLen (true for
+ * any real candidate clip here, which is comfortably longer than
+ * BLUR_N_FFT); falls back to clamping for the (untested-in-practice) case
+ * where it's shorter.
+ */
+function mirrorPad(x, padLen) {
+  const out = new Float32Array(x.length + 2 * padLen);
+  out.set(x, padLen);
+  for (let i = 0; i < padLen; i++) {
+    const leftSrc = Math.min(x.length - 1, i + 1); // reflect: one past the edge, not the edge itself
+    const rightSrc = Math.max(0, x.length - 2 - i);
+    out[padLen - 1 - i] = x[leftSrc];
+    out[padLen + x.length + i] = x[rightSrc];
+  }
+  return out;
+}
 
 function gaussianKernel(sigma) {
   if (sigma <= 0) return [1];
@@ -138,43 +167,56 @@ function convolveFreqAxisHalf(magHalf, kernel) {
 }
 
 /**
- * x: Float32Array of audio in [-1, 1] at sr. intensity: 0..1, 0 = no change
- * (the "Concealing noise" slider's default). Returns a new Float32Array of
- * the same length. Thin wrapper around blurConcealerWithSigmas - FREQUENCY
- * ONLY for now (time sigma pinned to 0), by explicit preference after
- * comparing both axes by ear: frequency-only blurring (vaguer vowel
- * timbre/formants, crisp timing) was clearly preferred over smearing time
- * (vaguer transients/syllable boundaries). MAX_TIME_SIGMA_FRAMES is left
- * defined and blurConcealerWithSigmas still takes both axes independently,
- * so time blurring can be re-enabled here later without reworking anything.
+ * x: Float32Array of audio in [-1, 1] at sr. intensity: 0..1, 0 = original
+ * unchanged (no STFT at all - the early return below skips straight past
+ * it, since there's nothing to compute), 1 = full blur on both axes
+ * (MAX_FREQ_SIGMA_BINS, MAX_TIME_SIGMA_FRAMES) with fully randomized phase.
+ * Returns a new Float32Array of the same length. Blur width on both axes
+ * AND the phase-randomization amount all scale together, linearly, from
+ * the one intensity value - at e.g. 0.5 you get half the max blur sigma on
+ * each axis AND a half-random/half-original phase crossfade (see
+ * blurConcealerWithSigmas' own phaseRandomization parameter for how that
+ * crossfade actually works).
  */
 export function blurConcealer(x, sr, intensity) {
   if (intensity <= 0) return x;
-  return blurConcealerWithSigmas(x, sr, intensity * MAX_FREQ_SIGMA_BINS, 0);
+  return blurConcealerWithSigmas(x, sr, intensity * MAX_FREQ_SIGMA_BINS, intensity * MAX_TIME_SIGMA_FRAMES, intensity);
 }
 
 /**
- * Same effect as blurConcealer, but with the frequency and time blur
- * widths (in FFT bins / STFT frames - see this module's header comment for
- * what a "bin"/"frame" is worth in Hz/ms at BLUR_N_FFT/BLUR_HOP above) set
- * directly and independently, rather than both scaled together by one
- * intensity value. freqSigmaBins/timeSigmaFrames <= 0 skips blurring that axis.
+ * Same effect as blurConcealer, but with the frequency/time blur widths (in
+ * FFT bins / STFT frames - see this module's header comment for what a
+ * "bin"/"frame" is worth in Hz/ms at BLUR_N_FFT/BLUR_HOP above) and the
+ * phase-randomization amount set directly and independently, rather than
+ * all three scaled together by one intensity value.
+ * freqSigmaBins/timeSigmaFrames <= 0 skips blurring that axis.
+ * phaseRandomization 0..1: 0 keeps each bin's original phase (as before -
+ * just a blurred magnitude on top of the real phase, which is what read as
+ * "vocoded"); 1 discards it entirely for a random angle, same reasoning as
+ * noiseShapeConcealer's phase replacement. In between, the two full
+ * reconstructions (same blurred magnitude, original vs. random phase) are
+ * crossfaded as WAVEFORMS, not as phase angles directly (which wouldn't be
+ * meaningful - phase is circular).
  */
-export function blurConcealerWithSigmas(x, sr, freqSigmaBins, timeSigmaFrames) {
+export function blurConcealerWithSigmas(x, sr, freqSigmaBins, timeSigmaFrames, phaseRandomization = 0) {
   if (freqSigmaBins <= 0 && timeSigmaFrames <= 0) return x;
 
-  // Zero-pad by a full BLUR_N_FFT on each side before analysis, trimmed back
-  // off after reconstruction (see this function's header comment below for
-  // why: the WOLA overlap-add normalization divides by a near-zero
-  // window-squared sum right at a frame's own edge, which only stays safe
-  // when the reconstructed content there naturally tapers to match - true
-  // for an unmodified round-trip, but broken once frequency blurring
-  // redistributes energy into what used to be that taper. Padding keeps all
-  // genuine content safely inside the fully-overlapped interior, where
-  // normSum is stable, and confines the unstable edge region to padding we
-  // discard.
-  const padded = new Float32Array(x.length + 2 * BLUR_N_FFT);
-  padded.set(x, BLUR_N_FFT);
+  // Pad by a full BLUR_N_FFT on each side before analysis, trimmed back off
+  // after reconstruction. Needed in the first place because the WOLA
+  // overlap-add normalization divides by a near-zero window-squared sum
+  // right at a frame's own edge, which only stays safe when the
+  // reconstructed content there naturally tapers to match - true for an
+  // unmodified round-trip, but broken once frequency blurring redistributes
+  // energy into what used to be that taper; padding keeps genuine content
+  // inside the fully-overlapped interior where normSum is stable. MIRROR
+  // padding specifically (not silence) because the time-axis blur below
+  // reaches into this padding too once a frame near the real edge is within
+  // one kernel-width of it (a short ~300ms clip's edges are well within one
+  // kernel-width at high time-sigma) - silence there would pull those edge
+  // frames' blurred magnitude down toward zero; reflecting the clip's own
+  // content instead gives the blur real, representative neighbors to blend
+  // with even right at the boundary.
+  const padded = mirrorPad(x, BLUR_N_FFT);
 
   const halfLen = BLUR_N_FFT / 2 + 1; // bins 0..Nyquist inclusive - the canonical half, see convolveFreqAxisHalf
   const window = hannWindow(BLUR_N_FFT);
@@ -201,7 +243,7 @@ export function blurConcealerWithSigmas(x, sr, freqSigmaBins, timeSigmaFrames) {
   let blurredHalf = convolveFreqAxisHalf(magHalf, freqKernel);
   blurredHalf = convolveTimeAxis(blurredHalf, timeKernel);
 
-  // Re-apply the blurred magnitude, keeping each frame's original phase -
+  // Re-apply the blurred magnitude, keeping each frame's ORIGINAL phase -
   // reconstructed directly from the phase ANGLE, not as a ratio of the
   // blurred to original magnitude: that ratio explodes near spectral nulls,
   // where the original magnitude is near-zero but the blur has pulled in
@@ -209,25 +251,63 @@ export function blurConcealerWithSigmas(x, sr, freqSigmaBins, timeSigmaFrames) {
   // touched directly; the upper (mirror) half is then set explicitly from
   // the lower half's conjugate, which is what actually guarantees the
   // reconstructed spectrum stays conjugate-symmetric (see
-  // convolveFreqAxisHalf's comment for why that matters).
-  for (let t = 0; t < nFrames; t++) {
-    const { re, im } = frames[t];
-    for (let k = 0; k < halfLen; k++) {
-      const originalMag = magHalf[t][k];
-      const angle = originalMag > 1e-12 ? Math.atan2(im[k], re[k]) : 0;
-      const newMag = blurredHalf[t][k];
-      re[k] = newMag * Math.cos(angle);
-      im[k] = newMag * Math.sin(angle);
+  // convolveFreqAxisHalf's comment for why that matters). Skipped entirely
+  // when phaseRandomization is already 1 (no original-phase reconstruction
+  // needed at all in that case).
+  let outOriginalPhase = null;
+  if (phaseRandomization < 1) {
+    for (let t = 0; t < nFrames; t++) {
+      const { re, im } = frames[t];
+      for (let k = 0; k < halfLen; k++) {
+        const originalMag = magHalf[t][k];
+        const angle = originalMag > 1e-12 ? Math.atan2(im[k], re[k]) : 0;
+        const newMag = blurredHalf[t][k];
+        re[k] = newMag * Math.cos(angle);
+        im[k] = newMag * Math.sin(angle);
+      }
+      for (let k = halfLen; k < BLUR_N_FFT; k++) {
+        const mirror = BLUR_N_FFT - k;
+        re[k] = re[mirror];
+        im[k] = -im[mirror];
+      }
     }
-    for (let k = halfLen; k < BLUR_N_FFT; k++) {
-      const mirror = BLUR_N_FFT - k;
-      re[k] = re[mirror];
-      im[k] = -im[mirror];
-    }
+    const out = istft(frames, BLUR_N_FFT, BLUR_HOP, padded.length);
+    outOriginalPhase = out.subarray(BLUR_N_FFT, BLUR_N_FFT + x.length);
   }
 
-  const out = istft(frames, BLUR_N_FFT, BLUR_HOP, padded.length);
-  return Float32Array.from(out.subarray(BLUR_N_FFT, BLUR_N_FFT + x.length));
+  // Same blurred magnitude, but with each bin's phase replaced by a random
+  // angle instead - same technique as noiseShapeConcealer. Skipped
+  // entirely when phaseRandomization is 0.
+  let outRandomPhase = null;
+  if (phaseRandomization > 0) {
+    const randomFrames = new Array(nFrames);
+    for (let t = 0; t < nFrames; t++) {
+      const re = new Float64Array(BLUR_N_FFT);
+      const im = new Float64Array(BLUR_N_FFT);
+      for (let k = 0; k < halfLen; k++) {
+        const newMag = blurredHalf[t][k];
+        const angle = Math.random() * 2 * Math.PI;
+        re[k] = newMag * Math.cos(angle);
+        im[k] = newMag * Math.sin(angle);
+      }
+      for (let k = halfLen; k < BLUR_N_FFT; k++) {
+        const mirror = BLUR_N_FFT - k;
+        re[k] = re[mirror];
+        im[k] = -im[mirror];
+      }
+      randomFrames[t] = { re, im };
+    }
+    const out = istft(randomFrames, BLUR_N_FFT, BLUR_HOP, padded.length);
+    outRandomPhase = out.subarray(BLUR_N_FFT, BLUR_N_FFT + x.length);
+  }
+
+  if (phaseRandomization <= 0) return Float32Array.from(outOriginalPhase);
+  if (phaseRandomization >= 1) return Float32Array.from(outRandomPhase);
+  const blended = new Float32Array(x.length);
+  for (let i = 0; i < x.length; i++) {
+    blended[i] = (1 - phaseRandomization) * outOriginalPhase[i] + phaseRandomization * outRandomPhase[i];
+  }
+  return blended;
 }
 
 /**
