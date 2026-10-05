@@ -17,6 +17,98 @@ import { featureExtractor } from './mel.js';
 import { deEss } from './deesser.js';
 import { applyConcealingNoise } from './concealer-noise.js';
 
+const GATE_WINDOW_MS = 20;
+const GATE_RELATIVE_THRESHOLD_DB = -20;
+
+/**
+ * Mean-square energy computed only over "active" sub-windows of x (20ms
+ * windows whose own level is within GATE_RELATIVE_THRESHOLD_DB of the
+ * loudest window), ignoring quieter/silent stretches entirely rather than
+ * averaging them in - the same gating principle broadcast loudness
+ * standards (EBU R128/ITU-R BS.1770) use, applied here for the same
+ * reason: a clip that's mostly silence plus one brief loud burst (a lone
+ * consonant or "s"/"sh") has a tiny flat average, dominated by the silent
+ * majority - used as a level reference, that makes getConcealer's own
+ * energy-normalization step scale the WHOLE clip up to match normal
+ * speech, blowing that one brief burst up far louder than real speech
+ * ever gets. Gating measures "how loud is this clip where it's actually
+ * making sound" instead, which is what the normalization should have been
+ * matching against all along.
+ */
+function gatedMeanSquare(x, sr) {
+  const winSize = Math.max(1, Math.round((sr * GATE_WINDOW_MS) / 1000));
+  if (x.length <= winSize) {
+    let sum = 0;
+    for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
+    return x.length > 0 ? sum / x.length : 0;
+  }
+
+  const nWindows = Math.ceil(x.length / winSize);
+  const windowMeanSq = new Float64Array(nWindows);
+  let peakMeanSq = 0;
+  for (let w = 0; w < nWindows; w++) {
+    const start = w * winSize;
+    const end = Math.min(x.length, start + winSize);
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += x[i] * x[i];
+    const meanSq = sum / (end - start);
+    windowMeanSq[w] = meanSq;
+    if (meanSq > peakMeanSq) peakMeanSq = meanSq;
+  }
+
+  // Power-domain threshold - GATE_RELATIVE_THRESHOLD_DB is a conventional
+  // (amplitude/RMS) dB figure, hence /10 here rather than /20 (power is
+  // amplitude squared, so a dB value halves in the exponent when applied
+  // to power instead of amplitude).
+  const threshold = peakMeanSq * 10 ** (GATE_RELATIVE_THRESHOLD_DB / 10);
+  let gatedSum = 0;
+  let gatedCount = 0;
+  for (let w = 0; w < nWindows; w++) {
+    if (windowMeanSq[w] >= threshold) {
+      gatedSum += windowMeanSq[w];
+      gatedCount++;
+    }
+  }
+  // gatedCount is always >= 1 - the window defining peakMeanSq always
+  // passes its own threshold - but guarded anyway for clarity.
+  return gatedCount > 0 ? gatedSum / gatedCount : peakMeanSq;
+}
+
+/**
+ * Like gatedMeanSquare, but for a buffer much longer than the clip it's
+ * being energy-matched against (the ~2s live pendingVoice window vs. a
+ * single ~300ms concealer clip, in getConcealer below). gatedMeanSquare's
+ * own gate threshold is relative to whatever the single loudest moment in
+ * whatever it's handed happens to be - gating the WHOLE 2s buffer in one
+ * pass measures "how loud is this relative to an outlier peak that could
+ * have occurred anywhere across 2 whole seconds", not "how loud is this at
+ * the SAME time scale as the clip it's being compared to" - those aren't
+ * the same question, and a longer window is statistically more likely to
+ * contain a more extreme peak purely by having more chances to.
+ * Splitting the live buffer into clip-sized chunks first, gating each one
+ * on its own terms, then averaging keeps both sides of the comparison at
+ * the same time scale. Averages the chunks' RMS values (not their
+ * mean-square/power), since averaging power would weight louder chunks
+ * disproportionately more than a plain "how loud does each chunk sound,
+ * on average" should; returns that average squared back, so callers can
+ * keep using Math.sqrt(...) on the result the same way as with
+ * gatedMeanSquare's own return value. If x doesn't divide evenly into
+ * chunkSize, the leftover is dropped from the START (the oldest audio),
+ * keeping only the most recent whole chunks.
+ */
+function liveGatedMeanSquare(x, sr, chunkSize) {
+  if (x.length < chunkSize) return gatedMeanSquare(x, sr);
+  const nChunks = Math.floor(x.length / chunkSize);
+  const start = x.length - nChunks * chunkSize;
+  let rmsSum = 0;
+  for (let c = 0; c < nChunks; c++) {
+    const chunk = x.slice(start + c * chunkSize, start + (c + 1) * chunkSize);
+    rmsSum += Math.sqrt(gatedMeanSquare(chunk, sr));
+  }
+  const avgRms = rmsSum / nChunks;
+  return avgRms * avgRms;
+}
+
 export class GranSpeechMask {
   /**
    * @param {number} sr - audio sample rate this instance operates at.
@@ -492,13 +584,14 @@ export class GranSpeechMask {
     const chosen = this.memory[bestIdx];
     chosen.cooldown = this.maxCountdownReuse;
 
-    // Normalize energy to match the live buffer.
-    let liveMeanSq = 0;
-    for (let i = 0; i < pv.length; i++) liveMeanSq += pv[i] * pv[i];
-    liveMeanSq /= pv.length;
-    let clipMeanSq = 0;
-    for (let i = 0; i < chosen.clip.length; i++) clipMeanSq += chosen.clip[i] * chosen.clip[i];
-    clipMeanSq /= chosen.clip.length;
+    // Normalize energy to match the live buffer - gated (see
+    // gatedMeanSquare's own comment for why), not a flat whole-signal
+    // average, on both sides for consistency. The live side is additionally
+    // chunked to the clip's own size first (see liveGatedMeanSquare's own
+    // comment) so both sides of the comparison are measured at the same
+    // time scale, not "a single clip" vs "the whole 2s history at once".
+    const liveMeanSq = liveGatedMeanSquare(pv, this.sr, chosen.clip.length);
+    const clipMeanSq = gatedMeanSquare(chosen.clip, this.sr);
     const energyScale = Math.sqrt(liveMeanSq) / Math.sqrt(clipMeanSq);
     const concealer = new Float32Array(chosen.clip.length);
     for (let i = 0; i < concealer.length; i++) concealer[i] = chosen.clip[i] * energyScale;
