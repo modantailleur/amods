@@ -178,11 +178,12 @@ export class ConcealerStream {
     // "the original mic" - always included in recSum (when its own level
     // is above zero and noiseEnabled), same as concBlock is, rather than
     // gated the way playSum's copy is by listenNoise above.
-    // conc_multiplier is the SAME "Concealer level" dB fader concBlock's
-    // own mult already used above, per explicit request that one control
-    // governs both.
+    // concealing_noise_level is the "Noise level" dB fader's own
+    // multiplier, independent of conc_multiplier ("Concealer level") -
+    // the two used to be tied together, but that's been explicitly
+    // undone; each level fader now only affects its own section.
     const noiseBlock = activeNoise.nextBlock(frames);
-    const noiseGain = (this.streamConfig.concealing_noise_level ?? 0) * this.streamConfig.conc_multiplier;
+    const noiseGain = this.streamConfig.concealing_noise_level ?? 0;
 
     const playSum = new Float32Array(frames);
     const recSum = new Float32Array(frames);

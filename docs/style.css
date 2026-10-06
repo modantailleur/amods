@@ -206,31 +206,37 @@ h1 {
   margin-block: 0;
 }
 
-.concealer-controls-panel {
+.concealer-controls-panel,
+.noise-controls-panel {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.concealer-level-panel {
+.concealer-level-panel,
+.noise-level-panel {
   flex: 0 0 130px;
   display: flex;
   flex-direction: column;
 }
 
-.concealer-level-panel .fader-row {
+.concealer-level-panel .fader-row,
+.noise-level-panel .fader-row {
   flex: 1;
   justify-content: center;
 }
 
-/* Inside the narrowed Concealer controls panel, the label goes on its own
-   line above the slider (rather than competing for horizontal space with
-   it) so "Concealer memory rate" never forces the panel wider. */
-.concealer-controls-panel .row {
+/* Inside the narrowed controls panel, the label goes on its own line
+   above the slider (rather than competing for horizontal space with it)
+   so a long label (e.g. "Concealer memory rate") never forces the panel
+   wider. */
+.concealer-controls-panel .row,
+.noise-controls-panel .row {
   flex-wrap: wrap;
   row-gap: 4px;
 }
 
-.concealer-controls-panel .row label {
+.concealer-controls-panel .row label,
+.noise-controls-panel .row label {
   flex: 1 0 100%;
   min-width: 0;
 }

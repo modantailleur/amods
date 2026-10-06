@@ -59,8 +59,8 @@ const els = {
   concealerEnabledToggle: document.getElementById('concealer-enabled-toggle'),
   noiseEnabledToggle: document.getElementById('noise-enabled-toggle'),
   noiseTypeSelect: document.getElementById('noise-type-select'),
-  concealingNoise: document.getElementById('concealing-noise'),
-  concealingNoiseValue: document.getElementById('concealing-noise-value'),
+  noiseLevel: document.getElementById('noise-level'),
+  noiseLevelValue: document.getElementById('noise-level-value'),
   concealingNoiseSensitivity: document.getElementById('concealing-noise-sensitivity'),
   concealingNoiseSensitivityValue: document.getElementById('concealing-noise-sensitivity-value'),
   concLevel: document.getElementById('conc-level'),
@@ -151,15 +151,10 @@ function sensitivityToSeconds(rateStr) {
   return 10 - parseFloat(rateStr) * 9.8;
 }
 
-// "Noise" slider stays 0..1 in the UI like the others, but the ACTUAL
-// gain it drives (concealing_noise_level, see stream.js's noiseGain) goes
-// up to NOISE_LEVEL_MAX_GAIN - raise/lower this one constant to change how
-// loud the slider's top end gets, without touching the slider's own
-// min/max/step in the HTML.
-const NOISE_LEVEL_MAX_GAIN = 3;
-function noiseSliderToLevel(rateStr) {
-  return parseFloat(rateStr) * NOISE_LEVEL_MAX_GAIN;
-}
+// "Noise level" is a dB fader exactly like "Concealer level" (see
+// dbToMultiplier above) - no separate mapping needed, and unlike before,
+// no longer scaled by Concealer level's own multiplier either (see
+// stream.js's noiseGain - explicit request that the two be independent).
 
 // "Concealing overlap" has exactly 3 discrete stops (not a continuous
 // range) - each is the [min, max] ms window before a new concealer clip can
@@ -603,14 +598,13 @@ async function ensureEngine() {
       concealerEnabled: els.concealerEnabledToggle.checked,
       noiseEnabled: els.noiseEnabledToggle.checked,
       // The "Noise controls" background bed - which color (see
-      // noise-generators.js/speech-shaped-noise.js), level 0-1 (mapped to
-      // 0-NOISE_LEVEL_MAX_GAIN), and the speech-shaped color's own
-      // "sensitivity" in seconds (unused by white/pink). Level is also
-      // scaled by concMultiplier below, in stream.js, per explicit
-      // request that the "Concealer level" fader govern both this and the
-      // normal concealer clips together.
+      // noise-generators.js/speech-shaped-noise.js), its own "Noise
+      // level" dB fader (independent of "Concealer level" - explicit
+      // request that the two no longer share one control), and the
+      // speech-shaped color's own "sensitivity" in seconds (unused by
+      // white/pink).
       noiseType: els.noiseTypeSelect.value,
-      concealingNoiseLevel: noiseSliderToLevel(els.concealingNoise.value),
+      concealingNoiseLevel: dbToMultiplier(els.noiseLevel.value),
       concealingNoiseSensitivity: sensitivityToSeconds(els.concealingNoiseSensitivity.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
       // Full volume, not silenced - listenOriginal below is now what decides
@@ -1452,9 +1446,9 @@ els.concealingOverlap.addEventListener('input', () => {
   if (worker && running) worker.postMessage({ type: 'setConcealingOverlap', minRatio, maxRatio });
 });
 
-els.concealingNoise.addEventListener('input', () => {
-  const value = noiseSliderToLevel(els.concealingNoise.value);
-  els.concealingNoiseValue.textContent = els.concealingNoise.value;
+els.noiseLevel.addEventListener('input', () => {
+  const value = dbToMultiplier(els.noiseLevel.value);
+  els.noiseLevelValue.textContent = `${parseFloat(els.noiseLevel.value) >= 0 ? '+' : ''}${els.noiseLevel.value} dB`;
   if (worker && running) worker.postMessage({ type: 'setConcealingNoiseLevel', value });
 });
 
