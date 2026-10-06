@@ -7,15 +7,17 @@ import { WhiteNoiseGenerator, PinkNoiseGenerator } from './noise-generators.js';
 
 export class ConcealerStream {
   /**
-   * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_type }
+   * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_type, noise_shaped_purity }
    * @param {SileroVAD} sourceVad - the real-time "is speech happening now" VAD (distinct from concealer.vad).
    * @param {GranSpeechMask} concealer
+   * @param {SileroVAD|TenVAD} noiseVad - dedicated VAD (own model instance, see worker-engine.js's init()) used only to gate SpeechShapedNoise's calibration input behind "Speech-shaped purity" below; constructed with logitThreshold: null so predict() returns the raw speech ratio, not a bool.
    * @param {boolean} debug - debug.html's debugTelemetry flag; gates [STREAMDIAG] logging below (see worker-engine.js)
    */
-  constructor(streamConfig, sourceVad, concealer, debug = false) {
+  constructor(streamConfig, sourceVad, concealer, noiseVad, debug = false) {
     this.streamConfig = streamConfig;
     this.sourceVad = sourceVad;
     this.concealer = concealer;
+    this.noiseVad = noiseVad;
     this.debug = debug; // DIAGNOSTIC gate
 
     this.pendingConcMaxSize = concealer.pendingConcMaxSize;
@@ -140,15 +142,33 @@ export class ConcealerStream {
       if (this.__chunkCount % 40 === 0) console.error(`[STREAMDIAG] processChunk call#${this.__chunkCount}`);
     }
 
-    // Fed unconditionally (every chunk, regardless of voice activity or
-    // concealing state) ONLY while Noise is actually enabled - this._noiseGen
-    // is null otherwise (see the constructor/setNoiseEnabled), so there's
-    // nothing to feed and no per-chunk cost. For SpeechShapedNoise this is
-    // the "texture" the background noise bed is shaped from, a completely
-    // separate concern from GranSpeechMask's own pendingVoice/VAD/memory
-    // below. White/pink noise ignore it (see noise-generators.js) but
-    // share the same call.
-    if (this._noiseGen) this._noiseGen.feed(x);
+    // Fed (every chunk, regardless of concealing state) ONLY while Noise is
+    // actually enabled - this._noiseGen is null otherwise (see the
+    // constructor/setNoiseEnabled), so there's nothing to feed and no
+    // per-chunk cost. For SpeechShapedNoise this is the "texture" the
+    // background noise bed is shaped from, a completely separate concern
+    // from GranSpeechMask's own pendingVoice/VAD/memory below. White/pink
+    // noise ignore it (see noise-generators.js) but share the same call.
+    //
+    // "Speech-shaped purity" (0-0.9) can further gate this for the
+    // speechShaped color specifically: only audio that this.noiseVad - a
+    // DEDICATED VAD, independent of sourceVad/concealer.vad, see its own
+    // constructor param comment - rates above the live purity threshold is
+    // actually fed into the calibration, so a silent/non-voice chunk
+    // doesn't get baked into the noise's spectral envelope. 0 (the
+    // default) means this gate is off entirely - no VAD call made, fed
+    // unconditionally, the original behavior from before this existed.
+    // White/pink ignore feed()'s content outright, so the gate is a no-op
+    // for them regardless of this setting.
+    if (this._noiseGen) {
+      const purity = this.streamConfig.noise_shaped_purity ?? 0;
+      if (this.noiseType === 'speechShaped' && purity > 0 && this.noiseVad) {
+        const speechRatio = await this.noiseVad.predict(x);
+        if (speechRatio > purity) this._noiseGen.feed(x);
+      } else {
+        this._noiseGen.feed(x);
+      }
+    }
 
     let voiceName = '';
     // Everything in this block - sourceVad inference, GranSpeechMask's own

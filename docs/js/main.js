@@ -66,10 +66,13 @@ const els = {
   concealerEnabledToggle: document.getElementById('concealer-enabled-toggle'),
   noiseEnabledToggle: document.getElementById('noise-enabled-toggle'),
   noiseTypeSelect: document.getElementById('noise-type-select'),
+  noiseVadTypeSelect: document.getElementById('noise-vad-type-select'),
   noiseLevel: document.getElementById('noise-level'),
   noiseLevelValue: document.getElementById('noise-level-value'),
   concealingNoiseSensitivity: document.getElementById('concealing-noise-sensitivity'),
   concealingNoiseSensitivityValue: document.getElementById('concealing-noise-sensitivity-value'),
+  concealingNoisePurity: document.getElementById('concealing-noise-purity'),
+  concealingNoisePurityValue: document.getElementById('concealing-noise-purity-value'),
   concLevel: document.getElementById('conc-level'),
   concLevelValue: document.getElementById('conc-level-value'),
   denoiserSelect: document.getElementById('denoiser-select'),
@@ -657,8 +660,19 @@ async function ensureEngine() {
       // speech-shaped color's own "sensitivity" in seconds (unused by
       // white/pink).
       noiseType: els.noiseTypeSelect.value,
+      // The dedicated VAD used only to gate SpeechShapedNoise's calibration
+      // input behind "Speech-shaped purity" below (see stream.js's
+      // processChunk) - intentionally a SEPARATE dropdown/model instance
+      // from "VAD" above (Concealer's own), same "never share a session"
+      // reasoning as sourceVad/concealerVad (see worker-engine.js's init()).
+      noiseVadType: els.noiseVadTypeSelect.value,
       concealingNoiseLevel: dbToMultiplier(els.noiseLevel.value),
       concealingNoiseSensitivity: sensitivityToSeconds(els.concealingNoiseSensitivity.value),
+      // "Speech-shaped purity" (0-0.9, 0 = VAD gating off entirely - feed
+      // the noise generator unconditionally, the original/default
+      // behavior) - only the speechShaped color's calibration input is
+      // ever gated by this; white/pink ignore feed()'s content outright.
+      noiseShapedPurity: purityToThreshold(els.concealingNoisePurity.value),
       concMultiplier: dbToMultiplier(els.concLevel.value),
       // Full volume, not silenced - listenOriginal below is now what decides
       // whether the original mic signal is audible at all (see stream.js's
@@ -1013,6 +1027,7 @@ function setControlsEnabled(enabled) {
   els.speakerSelect.disabled = !enabled;
   els.denoiserSelect.disabled = !enabled;
   els.vadTypeSelect.disabled = !enabled; // same reasoning as denoiserSelect - the backend is fixed for a session's lifetime, no live-switching mid-session
+  els.noiseVadTypeSelect.disabled = !enabled; // same reasoning - the noise-purity VAD's backend is also fixed for a session's lifetime
   els.pingBtn.disabled = !enabled;
   // Concealing rate, concealer memory rate, concealing smoothness,
   // concealing overlap, concealing noise, and concealer level stay enabled
@@ -1509,6 +1524,12 @@ els.concealingNoiseSensitivity.addEventListener('input', () => {
   const value = sensitivityToSeconds(els.concealingNoiseSensitivity.value);
   els.concealingNoiseSensitivityValue.textContent = els.concealingNoiseSensitivity.value;
   if (worker && running) worker.postMessage({ type: 'setConcealingNoiseSensitivity', value });
+});
+
+els.concealingNoisePurity.addEventListener('input', () => {
+  const value = purityToThreshold(els.concealingNoisePurity.value);
+  els.concealingNoisePurityValue.textContent = els.concealingNoisePurity.value;
+  if (worker && running) worker.postMessage({ type: 'setNoiseShapedPurity', value });
 });
 
 els.noiseTypeSelect.addEventListener('change', () => {

@@ -56,16 +56,24 @@ async function init(cfg) {
       }
     : null;
 
-  // Two SEPARATE VAD instances, NEVER sharing one underlying model
+  // Three SEPARATE VAD instances, NEVER sharing one underlying model
   // session/module - sourceVad and concealerVad are called from genuinely
   // independent, interleavable call chains (sourceVad every ~50ms from the
   // real-time chunk loop; concealerVad in a burst from _feedMemory, which
-  // runs fire-and-forget alongside that same loop - see updateMemory).
-  // Sharing one onnxruntime-web InferenceSession between them once silently
-  // corrupted sourceVad the first time concealerVad ever ran - not worth
-  // risking again for either backend.
+  // runs fire-and-forget alongside that same loop - see updateMemory), and
+  // noiseVad (the "Noise controls" panel's own "VAD" dropdown) gates
+  // SpeechShapedNoise's calibration input behind "Speech-shaped purity" -
+  // see stream.js's processChunk. Sharing one onnxruntime-web
+  // InferenceSession between two of these once silently corrupted sourceVad
+  // the first time concealerVad ever ran - not worth risking again for any
+  // backend. cfg.vadType (Concealer's VAD) and cfg.noiseVadType (Noise's)
+  // are intentionally independent dropdowns - either, both, or neither may
+  // be 'silero', so onnxruntime-web/the Silero model are only loaded at all
+  // if at least one of them actually needs it.
   let concealerVad;
-  if (cfg.vadType === 'silero') {
+  let noiseVad;
+  const needsSilero = cfg.vadType === 'silero' || cfg.noiseVadType === 'silero';
+  if (needsSilero) {
     const [{ default: ort }, { SileroVAD }] = await Promise.all([
       import('../vendor/ort.min.mjs'),
       import('./vad-silero.js'),
@@ -76,15 +84,28 @@ async function init(cfg) {
     // multi-threaded WASM, which needs SharedArrayBuffer and those headers.
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.wasmPaths = '../vendor/';
-    const [sourceVadSession, concealerVadSession] = await Promise.all([
-      ort.InferenceSession.create('../models/silero_vad.onnx'),
-      ort.InferenceSession.create('../models/silero_vad.onnx'),
+    const makeVad = async (type, opts) => {
+      if (type === 'silero') {
+        const session = await ort.InferenceSession.create('../models/silero_vad.onnx');
+        return new SileroVAD(session, opts);
+      }
+      return new TenVAD(opts);
+    };
+    [sourceVad, concealerVad, noiseVad] = await Promise.all([
+      makeVad(cfg.vadType === 'silero' ? 'silero' : 'ten', { logitThreshold: cfg.concealingThreshold, sr: cfg.sr, name: 'source', debug: debugTelemetry }),
+      makeVad(cfg.vadType === 'silero' ? 'silero' : 'ten', { logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr, name: 'concealer', debug: debugTelemetry }),
+      // logitThreshold: null - predict() then returns the raw speech ratio
+      // instead of a bool (see vad-ten.js's own contract comment).
+      // "Speech-shaped purity" is applied live from streamConfig in
+      // stream.js's processChunk instead of being baked in here, so the
+      // live slider stays in sync with no separate setter needed to also
+      // push the value into this instance.
+      makeVad(cfg.noiseVadType === 'silero' ? 'silero' : 'ten', { logitThreshold: null, sr: cfg.sr, name: 'noise', debug: debugTelemetry }),
     ]);
-    sourceVad = new SileroVAD(sourceVadSession, { logitThreshold: cfg.concealingThreshold, sr: cfg.sr, name: 'source', debug: debugTelemetry });
-    concealerVad = new SileroVAD(concealerVadSession, { logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr, name: 'concealer', debug: debugTelemetry });
   } else {
     sourceVad = new TenVAD({ logitThreshold: cfg.concealingThreshold, sr: cfg.sr, name: 'source', debug: debugTelemetry });
     concealerVad = new TenVAD({ logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr, name: 'concealer', debug: debugTelemetry });
+    noiseVad = new TenVAD({ logitThreshold: null, sr: cfg.sr, name: 'noise', debug: debugTelemetry });
   }
   remoteDenoiser = cfg.denoiserEnabled ? new RemoteDenoiser() : null;
 
@@ -127,6 +148,7 @@ async function init(cfg) {
   console.log('[SESSION START]', JSON.stringify({
     sr: cfg.sr,
     vadType: cfg.vadType === 'silero' ? 'silero' : 'ten',
+    noiseVadType: cfg.noiseVadType === 'silero' ? 'silero' : 'ten',
     concealingThreshold: cfg.concealingThreshold,
     concealerMemoryThreshold: cfg.concealerMemoryThreshold,
     denoiserEnabled: Boolean(cfg.denoiserEnabled),
@@ -160,6 +182,12 @@ async function init(cfg) {
     concealing_noise_level: cfg.concealingNoiseLevel ?? 0,
     concealing_noise_sensitivity: cfg.concealingNoiseSensitivity ?? 2,
     noise_type: cfg.noiseType ?? 'speechShaped',
+    // "Speech-shaped purity" slider (0-0.9) - 0 means the noiseVad gate in
+    // stream.js's processChunk is off entirely (feed the speechShaped
+    // generator unconditionally, same as before this existed); above 0,
+    // only audio whose noiseVad speech ratio exceeds this value is fed in.
+    // Live-tunable via 'setNoiseShapedPurity' below, read fresh every chunk.
+    noise_shaped_purity: cfg.noiseShapedPurity ?? 0,
     // Debug-only listen toggles (see docs/debug.html) - index.html has no UI
     // for these, so they just stay at these defaults (concealer-only, same
     // as production always sounded before this existed) for every real
@@ -171,7 +199,7 @@ async function init(cfg) {
     listen_concealer: cfg.listenConcealer ?? true,
     listen_noise: cfg.listenNoise ?? true,
   };
-  stream = new ConcealerStream(streamConfig, sourceVad, concealer, debugTelemetry);
+  stream = new ConcealerStream(streamConfig, sourceVad, concealer, noiseVad, debugTelemetry);
 
   postMessage({ type: 'ready' });
   startStatusLoop();
@@ -448,6 +476,14 @@ self.onmessage = (event) => {
       // now (Noise off, or a different color active) - that method
       // remembers the value regardless and applies it if/when relevant.
       if (stream) stream.setNoiseSensitivity(msg.value);
+      break;
+    case 'setNoiseShapedPurity':
+      // "Speech-shaped purity" slider - read fresh every chunk from
+      // streamConfig inside stream.js's processChunk (see its own
+      // comment), so a direct field update here is enough; no secondary
+      // object needs to be told (unlike setConcealingNoiseSensitivity,
+      // which also has to push into the live generator instance).
+      if (stream) stream.streamConfig.noise_shaped_purity = msg.value;
       break;
     case 'setConcealingNoiseType':
       // "Noise controls" panel's color dropdown (speechShaped/white/pink
