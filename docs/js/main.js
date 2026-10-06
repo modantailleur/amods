@@ -1532,7 +1532,20 @@ els.concealingNoisePurity.addEventListener('input', () => {
   if (worker && running) worker.postMessage({ type: 'setNoiseShapedPurity', value });
 });
 
+// VAD/Sensitivity/Speech-shaped purity only apply to the speechShaped
+// color - hidden (visibility, not display - see style.css's own comment)
+// whenever white/pink is selected, so the panel's height never changes
+// and nothing below it shifts when switching types.
+function updateNoiseTypeDependentVisibility() {
+  const isSpeechShaped = els.noiseTypeSelect.value === 'speechShaped';
+  document.querySelectorAll('.noise-type-dependent').forEach((row) => {
+    row.classList.toggle('is-hidden', !isSpeechShaped);
+  });
+}
+updateNoiseTypeDependentVisibility();
+
 els.noiseTypeSelect.addEventListener('change', () => {
+  updateNoiseTypeDependentVisibility();
   if (worker && running) worker.postMessage({ type: 'setConcealingNoiseType', value: els.noiseTypeSelect.value });
 });
 

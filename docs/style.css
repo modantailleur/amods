@@ -241,6 +241,15 @@ h1 {
   min-width: 0;
 }
 
+/* VAD/Sensitivity/Speech-shaped purity rows only apply to the
+   speech-shaped noise color - hidden (not removed - visibility, not
+   display, so the row keeps its layout space) whenever "Type" is set to
+   white/pink, so switching types never shifts anything below the panel
+   ("teleporting" text) despite the varying number of visible rows. */
+.noise-type-dependent.is-hidden {
+  visibility: hidden;
+}
+
 .warning {
   color: #cc5500;
   font-size: 0.8rem;
