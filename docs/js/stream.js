@@ -163,21 +163,34 @@ export class ConcealerStream {
     // A/B control, not a feature production needs an opinion on).
     const listenNoise = this.streamConfig.listen_noise ?? true;
 
+    // Master on/off for each section's whole feature (the toggle next to
+    // the "Concealer"/"Noise" sur-titles) - a REAL disable, unlike
+    // listenConcealer/listenNoise above (which only gate the DEBUG
+    // monitor mix): zeroes the contribution to BOTH playSum and recSum.
+    // Background processing (GranSpeechMask's memory building, the noise
+    // generator's own ticking) keeps running regardless while off, so
+    // switching back on doesn't need to "warm up" again - only the final
+    // audio contribution is gated here.
+    const concealerEnabled = this.streamConfig.concealer_enabled ?? true;
+    const noiseEnabled = this.streamConfig.noise_enabled ?? true;
+
     // The noise bed is its own third layer, neither "the concealer" nor
     // "the original mic" - always included in recSum (when its own level
-    // is above zero), same as concBlock is, rather than gated the way
-    // playSum's copy is by listenNoise above. conc_multiplier is the SAME
-    // "Concealer level" dB fader concBlock's own mult already used above,
-    // per explicit request that one control governs both.
+    // is above zero and noiseEnabled), same as concBlock is, rather than
+    // gated the way playSum's copy is by listenNoise above.
+    // conc_multiplier is the SAME "Concealer level" dB fader concBlock's
+    // own mult already used above, per explicit request that one control
+    // governs both.
     const noiseBlock = activeNoise.nextBlock(frames);
     const noiseGain = (this.streamConfig.concealing_noise_level ?? 0) * this.streamConfig.conc_multiplier;
 
     const playSum = new Float32Array(frames);
     const recSum = new Float32Array(frames);
     for (let i = 0; i < frames; i++) {
-      const noiseSample = noiseBlock[i] * noiseGain;
-      playSum[i] = (listenOriginal ? playMic[i] : 0) + (listenConcealer ? concBlock[i] : 0) + (listenNoise ? noiseSample : 0);
-      recSum[i] = recMic[i] + concBlock[i] + noiseSample;
+      const concContribution = concealerEnabled ? concBlock[i] : 0;
+      const noiseContribution = noiseEnabled ? noiseBlock[i] * noiseGain : 0;
+      playSum[i] = (listenOriginal ? playMic[i] : 0) + (listenConcealer ? concContribution : 0) + (listenNoise ? noiseContribution : 0);
+      recSum[i] = recMic[i] + concContribution + noiseContribution;
     }
 
     const sr = this.streamConfig.sr;

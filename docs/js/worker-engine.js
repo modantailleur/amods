@@ -124,6 +124,13 @@ async function init(cfg) {
     monitor_gain: cfg.monitorGain ?? 0.0,
     record_mic_gain: 1.0,
     conc_multiplier: cfg.concMultiplier ?? 1.0,
+    // Master on/off for each section's whole feature, from the toggle
+    // next to the "Concealer"/"Noise" sur-titles (see stream.js's own
+    // comment on concealerEnabled/noiseEnabled) - a real disable
+    // (zeroes the final audio contribution entirely), not a debug-only
+    // monitor toggle like listen_concealer/listen_noise below.
+    concealer_enabled: cfg.concealerEnabled ?? true,
+    noise_enabled: cfg.noiseEnabled ?? true,
     // "Noise controls" panel's background bed - level (0-1 mapped to
     // 0-NOISE_LEVEL_MAX_GAIN, see main.js's noiseSliderToLevel, "Noise"
     // slider), the EMA time constant in seconds that the "Sensitivity"
@@ -332,6 +339,17 @@ self.onmessage = (event) => {
       break;
     case 'setConcMultiplier':
       if (stream) stream.streamConfig.conc_multiplier = msg.value;
+      break;
+    case 'setConcealerEnabled':
+      // Master on/off for the whole "Concealer" section (see stream.js's
+      // own comment) - applied live, every chunk, so this takes effect
+      // immediately.
+      if (stream) stream.streamConfig.concealer_enabled = msg.value;
+      break;
+    case 'setNoiseEnabled':
+      // Master on/off for the whole "Noise" section - same reasoning as
+      // setConcealerEnabled above.
+      if (stream) stream.streamConfig.noise_enabled = msg.value;
       break;
     case 'setListenOriginal':
       if (stream) stream.streamConfig.listen_original = msg.value;

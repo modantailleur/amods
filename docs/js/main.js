@@ -56,6 +56,8 @@ const els = {
   concealingSmoothnessValue: document.getElementById('concealing-smoothness-value'),
   concealingOverlap: document.getElementById('concealing-overlap'),
   concealingOverlapValue: document.getElementById('concealing-overlap-value'),
+  concealerEnabledToggle: document.getElementById('concealer-enabled-toggle'),
+  noiseEnabledToggle: document.getElementById('noise-enabled-toggle'),
   noiseTypeSelect: document.getElementById('noise-type-select'),
   concealingNoise: document.getElementById('concealing-noise'),
   concealingNoiseValue: document.getElementById('concealing-noise-value'),
@@ -595,6 +597,11 @@ async function ensureEngine() {
       fadeDuration: smoothnessToFadeDuration(els.concealingSmoothness.value),
       concealingOverlapMinRatio: overlapStopRatios(els.concealingOverlap.value).minRatio,
       concealingOverlapMaxRatio: overlapStopRatios(els.concealingOverlap.value).maxRatio,
+      // Master on/off toggles next to the "Concealer"/"Noise" sur-titles
+      // - see stream.js's own comment on concealerEnabled/noiseEnabled
+      // for how these differ from the debug-only listen toggles.
+      concealerEnabled: els.concealerEnabledToggle.checked,
+      noiseEnabled: els.noiseEnabledToggle.checked,
       // The "Noise controls" background bed - which color (see
       // noise-generators.js/speech-shaped-noise.js), level 0-1 (mapped to
       // 0-NOISE_LEVEL_MAX_GAIN), and the speech-shaped color's own
@@ -1465,6 +1472,17 @@ els.concLevel.addEventListener('input', () => {
   const mult = dbToMultiplier(els.concLevel.value);
   els.concLevelValue.textContent = `${parseFloat(els.concLevel.value) >= 0 ? '+' : ''}${els.concLevel.value} dB`;
   if (worker && running) worker.postMessage({ type: 'setConcMultiplier', value: mult });
+});
+
+// Master on/off toggles next to the "Concealer"/"Noise" sur-titles -
+// present on both index.html and debug.html, unlike the debug-only
+// listen toggles below, so no DEBUG_MODE gate here.
+els.concealerEnabledToggle.addEventListener('change', () => {
+  if (worker && running) worker.postMessage({ type: 'setConcealerEnabled', value: els.concealerEnabledToggle.checked });
+});
+
+els.noiseEnabledToggle.addEventListener('change', () => {
+  if (worker && running) worker.postMessage({ type: 'setNoiseEnabled', value: els.noiseEnabledToggle.checked });
 });
 
 if (DEBUG_MODE && els.listenOriginalToggle) {

@@ -21,6 +21,7 @@ body {
   select, input[type="range"] { background: #2a2c31; color: inherit; }
   .viz-status-dot { background: #40434a; }
   .viz-dot-neutral { background: #40434a; }
+  .toggle-slider { background: #40434a; }
   #debug-start-stop-btn, #debug-stop-btn { background: #26282d; border-color: #3a3d44; color: #9aa1ab; }
 }
 
@@ -100,6 +101,94 @@ h1 {
 
 .device-row select {
   width: 100%;
+}
+
+/* A named group of one or more panels under one master on/off switch
+   (see .section-header/.toggle-switch below) - e.g. "Concealer" over
+   Concealer controls + Concealer level, or "Noise" over Noise controls.
+   Owns the block margin that .panel-row/.panel normally would, so
+   nesting either inside a group doesn't double it up. */
+.section-group {
+  margin-block: 20px;
+}
+
+.section-group .panel-row,
+.section-group > .panel {
+  margin-block: 0;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+/* Bigger and plain-colored (not .panel h2's accent blue) - this names the
+   whole group, not one sub-panel inside it, so it needs to read as a
+   level above them. */
+.section-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+/* Standard sliding pill toggle (a checkbox restyled via its sibling
+   label, not a native checkbox) - a master on/off for the section's
+   whole feature, independent of whatever level its own sliders are set
+   to (e.g. turning "Noise" off here differs from the "Noise" level
+   slider reading 0 - the slider's value is preserved and restored when
+   switched back on). */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex: none;
+}
+
+.toggle-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: #cbd0d8;
+  border-radius: 22px;
+  transition: background-color 150ms linear;
+  pointer-events: none;
+}
+
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 2px;
+  top: 2px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 150ms linear;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: #2f6fed;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(18px);
+}
+
+.toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid #2f6fed;
+  outline-offset: 2px;
 }
 
 /* Two panels side by side, matching amods.gui's vad_frame/level_frame
