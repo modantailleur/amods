@@ -260,7 +260,8 @@ h1 {
    while a whole feature section sits unused. */
 .concealer-dependent.is-hidden,
 .noise-dependent.is-hidden,
-.viz-dependent.is-hidden {
+.viz-dependent.is-hidden,
+.debug-dependent.is-hidden {
   display: none;
 }
 

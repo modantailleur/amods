@@ -219,22 +219,30 @@
 
   <!-- Debug-only controls. main.js only wires these up when window.DEBUG_MODE
        is true (see above) - harmless/inert markup otherwise. -->
-  <section class="panel" id="debug-panel">
-    <h2>Debug</h2>
-    <p class="status-text">Plays a test audio file through the real-time pipeline as if it were live mic input</p>
-    <div class="transport-row">
-      <button id="debug-start-stop-btn" type="button" disabled title="Start debug replay" aria-label="Start debug replay">▶</button>
-      <button id="debug-stop-btn" type="button" disabled title="Stop" aria-label="Stop">⏹</button>
+  <div class="section-group">
+    <div class="section-header">
+      <label class="toggle-switch">
+        <input type="checkbox" id="debug-enabled-toggle" checked />
+        <span class="toggle-slider"></span>
+      </label>
+      <h2 class="section-title">Debug</h2>
     </div>
-    <div id="debug-progress" class="progress-bar" hidden><div id="debug-progress-fill" class="progress-fill"></div></div>
-    <p id="debug-status" class="status-text"></p>
-    <div class="row">
-      <span class="playback-hint" title="Playback only — what you hear through the speaker. Does not affect what's recorded or fed into memory.">🎧</span>
-      <label><input type="checkbox" id="listen-original-toggle" /> Source track</label>
-      <label><input type="checkbox" id="listen-concealer-toggle" checked /> Concealer track</label>
-      <label><input type="checkbox" id="listen-noise-toggle" /> Noise track</label>
-    </div>
-  </section>
+    <section class="panel debug-dependent" id="debug-panel">
+      <p class="status-text">Plays a test audio file through the real-time pipeline as if it were live mic input</p>
+      <div class="transport-row">
+        <button id="debug-start-stop-btn" type="button" disabled title="Start debug replay" aria-label="Start debug replay">▶</button>
+        <button id="debug-stop-btn" type="button" disabled title="Stop" aria-label="Stop">⏹</button>
+      </div>
+      <div id="debug-progress" class="progress-bar" hidden><div id="debug-progress-fill" class="progress-fill"></div></div>
+      <p id="debug-status" class="status-text"></p>
+      <div class="row">
+        <span class="playback-hint" title="Playback only — what you hear through the speaker. Does not affect what's recorded or fed into memory.">🎧</span>
+        <label><input type="checkbox" id="listen-original-toggle" /> Source track</label>
+        <label><input type="checkbox" id="listen-concealer-toggle" checked /> Concealer track</label>
+        <label><input type="checkbox" id="listen-noise-toggle" /> Noise track</label>
+      </div>
+    </section>
+  </div>
 
   <script type="module" src="js/main.js"></script>
 </body>

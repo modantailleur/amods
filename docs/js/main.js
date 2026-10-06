@@ -91,6 +91,7 @@ const els = {
   listenConcealerToggle: document.getElementById('listen-concealer-toggle'),
   listenNoiseToggle: document.getElementById('listen-noise-toggle'),
   vizEnabledToggle: document.getElementById('viz-enabled-toggle'),
+  debugEnabledToggle: document.getElementById('debug-enabled-toggle'),
   specMicCanvas: document.getElementById('spec-mic'),
   specConcealerCanvas: document.getElementById('spec-concealer'),
   specNoiseCanvas: document.getElementById('spec-noise'),
@@ -1598,9 +1599,20 @@ function updateVizDependentVisibility() {
   });
 }
 
+// The "Debug" panel's own master toggle (debug.html only, same reasoning
+// as vizEnabledToggle above - els.debugEnabledToggle is null on
+// index.html, which has no such element or panel at all).
+function updateDebugDependentVisibility() {
+  const enabled = Boolean(els.debugEnabledToggle && els.debugEnabledToggle.checked);
+  document.querySelectorAll('.debug-dependent').forEach((el) => {
+    el.classList.toggle('is-hidden', !enabled);
+  });
+}
+
 updateConcealerDependentVisibility();
 updateNoiseDependentVisibility();
 if (DEBUG_MODE && els.vizEnabledToggle) updateVizDependentVisibility();
+if (DEBUG_MODE && els.debugEnabledToggle) updateDebugDependentVisibility();
 
 // Master on/off toggles next to the "Concealer"/"Noise" sur-titles -
 // present on both index.html and debug.html, unlike the debug-only
@@ -1619,6 +1631,25 @@ if (DEBUG_MODE && els.vizEnabledToggle) {
   els.vizEnabledToggle.addEventListener('change', () => {
     updateVizDependentVisibility();
     if (worker && running) worker.postMessage({ type: 'setVizEnabled', value: els.vizEnabledToggle.checked });
+  });
+}
+
+if (DEBUG_MODE && els.debugEnabledToggle) {
+  els.debugEnabledToggle.addEventListener('change', () => {
+    updateDebugDependentVisibility();
+    // Real disconnection, same principle as Concealer/Noise/Visualization:
+    // unlike those, the Debug replay feature has no persistent background
+    // resource to free (its AudioBuffer is only ever decoded on-demand,
+    // inside connectSource(), and already gets released whenever the
+    // session stops or switches source - see connectSource's own comment)
+    // - the one thing that CAN be left running is an actual in-progress
+    // debug replay, so stop() it immediately if that's what's currently
+    // playing (identical to pressing the existing Stop button - debugStopBtn
+    // already just calls stop() unconditionally, see its own listener).
+    // Collapsing the panel (updateDebugDependentVisibility above) already
+    // makes its Start/Stop buttons unreachable, so no new debug replay can
+    // be started while off.
+    if (!els.debugEnabledToggle.checked && running && activeSource === 'debug') stop();
   });
 }
 
