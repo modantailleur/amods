@@ -238,6 +238,52 @@ export class GranSpeechMask {
     this._healthConcealCount = 0;
   }
 
+  /**
+   * Frees this instance's two large allocations - memory (stored clips,
+   * up to memoryMaxlen * concealerDuration * sr * 4 bytes, ~5.6MB at this
+   * app's defaults once full) and pendingVoice (the rolling live buffer,
+   * up to pendingVoiceMaxDuration * sr samples, ~768KB at defaults) -
+   * along with every other piece of mutable in-flight state tied to
+   * them, resetting it all back to exactly what the constructor set it
+   * to. For when the "Concealer" section is toggled off: a REAL
+   * disconnect (RAM actually freed, not just a muted output) - see
+   * stream.js's ConcealerStream.setConcealerEnabled, the only caller.
+   * Re-enabling starts from empty, same as a brand-new instance - memory
+   * rebuilds from scratch, gated behind minMemoryToConceal before
+   * concealing resumes, same as right after a fresh page load.
+   * Deliberately does NOT touch this.vad or this.denoiser - those are
+   * shared/loaded-model resources (an ONNX session, a separate Worker
+   * running the denoiser) with no cheap, safe way to tear down and
+   * reload them on every toggle without adding real re-enable latency;
+   * out of scope here.
+   */
+  releaseMemory() {
+    this.memory = [];
+    this.pendingVoice = [];
+    this.curSizeBeforeUpdateMemory = 0;
+    this.stopProcessing = false;
+    this.curConcealing = false;
+    this.concealingCountdown = 0;
+    this.pendingSpeechActive = false;
+    this.pendingSpeechSamples = 0;
+    this.freshOnsetDuringFeed = false;
+    this.freshOnsetSamples = 0;
+    this.activeSelections = [];
+    this.lastFeedCandidates = [];
+    this.denoiseRunning = false;
+    this.memVadSeq = 0;
+    this.lastMemVadDurationMs = 0;
+    this.feedCycleSeq = 0;
+    this._healthFeedCycles = 0;
+    this._healthCandidatesTotal = 0;
+    this._healthCandidatesPassed = 0;
+    this._healthDenoiseCalls = 0;
+    this._healthDenoiseMs = 0;
+    this._healthDenoiseMaxMs = 0;
+    this._healthDenoiseErrors = 0;
+    this._healthConcealCount = 0;
+  }
+
   status() {
     return {
       ready: this.memory.length >= this.minMemoryToConceal,

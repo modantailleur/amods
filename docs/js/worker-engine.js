@@ -134,14 +134,13 @@ async function init(cfg) {
     noise_enabled: cfg.noiseEnabled ?? false,
     // "Noise controls" panel's background bed - level (the "Noise level"
     // dB fader, see main.js's dbToMultiplier), the EMA time constant in
-    // seconds that the "Sensitivity"
-    // slider sets for the speech-shaped color specifically (how far back
-    // its spectral envelope remembers - NOT a buffer size, and unused by
-    // white/pink), and which of the three colors (see noise-generators.js
-    // and speech-shaped-noise.js) is active - see ConcealerStream's own
-    // noiseGenerators/noiseType. All three live-tunable via
-    // 'setConcealingNoiseLevel'/'setConcealingNoiseSensitivity'/
-    // 'setConcealingNoiseType' below.
+    // seconds that the "Sensitivity" slider sets for the speech-shaped
+    // color specifically (how far back its spectral envelope remembers -
+    // NOT a buffer size, and unused by white/pink), and which of the
+    // three colors (see noise-generators.js and speech-shaped-noise.js)
+    // is active - see ConcealerStream's own _noiseGen/noiseType. All
+    // three live-tunable via 'setConcealingNoiseLevel'/
+    // 'setConcealingNoiseSensitivity'/'setConcealingNoiseType' below.
     concealing_noise_level: cfg.concealingNoiseLevel ?? 0,
     concealing_noise_sensitivity: cfg.concealingNoiseSensitivity ?? 2,
     noise_type: cfg.noiseType ?? 'speechShaped',
@@ -342,15 +341,22 @@ self.onmessage = (event) => {
       if (stream) stream.streamConfig.conc_multiplier = msg.value;
       break;
     case 'setConcealerEnabled':
-      // Master on/off for the whole "Concealer" section (see stream.js's
-      // own comment) - applied live, every chunk, so this takes effect
-      // immediately.
-      if (stream) stream.streamConfig.concealer_enabled = msg.value;
+      // Master on/off for the whole "Concealer" section - routed through
+      // ConcealerStream's own method (see its comment), not just poking
+      // streamConfig: it skips calling into GranSpeechMask/sourceVad
+      // entirely while off (no VAD/denoiser CPU cost) and frees
+      // GranSpeechMask's own memory/pendingVoice allocations - a real
+      // disconnect, not just a muted output.
+      if (stream) stream.setConcealerEnabled(msg.value);
       break;
     case 'setNoiseEnabled':
-      // Master on/off for the whole "Noise" section - same reasoning as
-      // setConcealerEnabled above.
-      if (stream) stream.streamConfig.noise_enabled = msg.value;
+      // Master on/off for the whole "Noise" section - unlike
+      // setConcealerEnabled above, this is routed through ConcealerStream's
+      // own method rather than just poking streamConfig, because it
+      // actually constructs/drops the active noise generator instance
+      // (see stream.js's own comment) for a real disconnect - less RAM
+      // and CPU while off, not just a muted output.
+      if (stream) stream.setNoiseEnabled(msg.value);
       break;
     case 'setListenOriginal':
       if (stream) stream.streamConfig.listen_original = msg.value;
@@ -406,16 +412,21 @@ self.onmessage = (event) => {
       // a buffer size (see speech-shaped-noise.js's header for why) - takes
       // effect immediately, with no glitch, since it only changes a scalar
       // smoothing factor rather than resizing/resetting anything. Only
-      // the speech-shaped generator has this - unused by white/pink, but
-      // harmless to set regardless (they just never read it).
-      if (stream) stream.noiseGenerators.speechShaped.setSensitivitySeconds(msg.value);
+      // the speech-shaped generator has this - unused by white/pink.
+      // Routed through ConcealerStream.setNoiseSensitivity (not applied
+      // directly here) since the generator instance may not exist right
+      // now (Noise off, or a different color active) - that method
+      // remembers the value regardless and applies it if/when relevant.
+      if (stream) stream.setNoiseSensitivity(msg.value);
       break;
     case 'setConcealingNoiseType':
       // "Noise controls" panel's color dropdown (speechShaped/white/pink
-      // - see noise-generators.js and speech-shaped-noise.js). Resets the
-      // newly-active generator's state (see ConcealerStream.setNoiseType)
-      // so switching back to one that's been idle doesn't play back
-      // stale/minutes-old content.
+      // - see noise-generators.js and speech-shaped-noise.js). While
+      // Noise is enabled, constructs a fresh instance of the newly-chosen
+      // color right away (see ConcealerStream.setNoiseType) - a clean
+      // start, not stale/minutes-old state from whenever it was last
+      // active. While Noise is disabled, just remembers the choice for
+      // whenever it's turned back on.
       if (stream) stream.setNoiseType(msg.value);
       break;
     case 'reset':
