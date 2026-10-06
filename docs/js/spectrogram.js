@@ -10,7 +10,7 @@
 //   - SpectrogramView runs in main.js (the main/UI thread) - owns a
 //     <canvas>, receives the Analyzer's already-computed columns over
 //     postMessage, and only ever draws - no FFT/analysis logic here.
-import { fft, hannWindow } from './mel.js';
+import { fft, hannWindow, melFilterbank } from './mel.js';
 
 const FFT_SIZE = 1024; // ~21ms at 48kHz - fine time/frequency tradeoff for a debug visualization, not a DSP-critical computation
 // Most speech/noise content of interest lives well under 8kHz - devoting
@@ -34,10 +34,16 @@ const DB_CEIL = 15;
 
 /**
  * Worker-side: maintains a rolling FFT_SIZE-sample buffer per track,
- * producing one log-magnitude column (Float32Array of length
- * displayBins, values pre-normalized to [0, 1], index 0 = lowest
- * frequency) each time computeColumn() is called. No DOM dependency -
- * safe to import and run inside a Worker.
+ * producing one log-mel column (Float32Array of length displayBins,
+ * values pre-normalized to [0, 1], index 0 = lowest frequency) each time
+ * computeColumn() is called. No DOM dependency - safe to import and run
+ * inside a Worker.
+ *
+ * Mel-scaled (not linear-frequency) so the limited displayBins rows are
+ * spent where speech energy actually concentrates (low frequencies) -
+ * reuses the same Slaney-style filterbank builder mel.js already has for
+ * VAD/denoiser feature extraction (see melFilterbank there), just with
+ * its own fmin/fmax/nMels tuned for this 0-8kHz display instead.
  */
 export class SpectrogramAnalyzer {
   constructor(sr, displayBins) {
@@ -45,9 +51,7 @@ export class SpectrogramAnalyzer {
     this.displayBins = displayBins;
     this.window = hannWindow(FFT_SIZE);
     this.buffer = new Float64Array(FFT_SIZE); // rolling - holds the most recent FFT_SIZE samples seen so far
-
-    const nyquist = sr / 2;
-    this.maxBin = Math.max(1, Math.min(FFT_SIZE / 2, Math.round((MAX_DISPLAY_HZ / nyquist) * (FFT_SIZE / 2))));
+    this.filterbank = melFilterbank(sr, FFT_SIZE, displayBins, 0, MAX_DISPLAY_HZ);
   }
 
   /** Append new samples (any length) to the rolling buffer, dropping the oldest to make room. */
@@ -67,20 +71,14 @@ export class SpectrogramAnalyzer {
     for (let i = 0; i < FFT_SIZE; i++) re[i] = this.buffer[i] * this.window[i];
     fft(re, im);
 
+    const nFreqs = FFT_SIZE / 2 + 1;
     const out = new Float32Array(this.displayBins);
-    const binsPerOutput = this.maxBin / this.displayBins;
-    for (let o = 0; o < this.displayBins; o++) {
-      const startBin = Math.floor(o * binsPerOutput);
-      const endBin = Math.max(startBin + 1, Math.floor((o + 1) * binsPerOutput));
-      let sumSq = 0;
-      let count = 0;
-      for (let b = startBin; b < endBin && b <= this.maxBin; b++) {
-        sumSq += re[b] * re[b] + im[b] * im[b];
-        count++;
-      }
-      const mag = count > 0 ? Math.sqrt(sumSq / count) : 0;
-      const db = 20 * Math.log10(mag + 1e-9);
-      out[o] = Math.max(0, Math.min(1, (db - DB_FLOOR) / (DB_CEIL - DB_FLOOR)));
+    for (let m = 0; m < this.displayBins; m++) {
+      const w = this.filterbank[m];
+      let e = 0;
+      for (let i = 0; i < nFreqs; i++) e += w[i] * (re[i] * re[i] + im[i] * im[i]);
+      const db = 10 * Math.log10(Math.max(e, 1e-12));
+      out[m] = Math.max(0, Math.min(1, (db - DB_FLOOR) / (DB_CEIL - DB_FLOOR)));
     }
     return out;
   }

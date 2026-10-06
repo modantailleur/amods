@@ -58,7 +58,7 @@ export function fft(re, im) {
 }
 
 // Slaney-style Hz<->mel conversion, matching librosa's default (htk=False).
-function hzToMel(hz) {
+export function hzToMel(hz) {
   const fMin = 0, fSp = 200 / 3;
   const minLogHz = 1000.0;
   const minLogMel = (minLogHz - fMin) / fSp;
@@ -68,7 +68,7 @@ function hzToMel(hz) {
   return mel;
 }
 
-function melToHz(mel) {
+export function melToHz(mel) {
   const fMin = 0, fSp = 200 / 3;
   const minLogHz = 1000.0;
   const minLogMel = (minLogHz - fMin) / fSp;
@@ -78,7 +78,7 @@ function melToHz(mel) {
   return hz;
 }
 
-function melFilterbank(sr, nFft, nMels, fmin, fmax) {
+export function melFilterbank(sr, nFft, nMels, fmin, fmax) {
   const nFreqs = nFft / 2 + 1;
   const fftFreqs = new Float64Array(nFreqs);
   for (let i = 0; i < nFreqs; i++) fftFreqs[i] = (i * sr) / nFft;
