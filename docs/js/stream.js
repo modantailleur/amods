@@ -172,7 +172,7 @@ export class ConcealerStream {
     // switching back on doesn't need to "warm up" again - only the final
     // audio contribution is gated here.
     const concealerEnabled = this.streamConfig.concealer_enabled ?? true;
-    const noiseEnabled = this.streamConfig.noise_enabled ?? true;
+    const noiseEnabled = this.streamConfig.noise_enabled ?? false; // opt-in, unlike concealerEnabled
 
     // The noise bed is its own third layer, neither "the concealer" nor
     // "the original mic" - always included in recSum (when its own level

@@ -130,10 +130,11 @@ async function init(cfg) {
     // (zeroes the final audio contribution entirely), not a debug-only
     // monitor toggle like listen_concealer/listen_noise below.
     concealer_enabled: cfg.concealerEnabled ?? true,
-    noise_enabled: cfg.noiseEnabled ?? true,
-    // "Noise controls" panel's background bed - level (0-1 mapped to
-    // 0-NOISE_LEVEL_MAX_GAIN, see main.js's noiseSliderToLevel, "Noise"
-    // slider), the EMA time constant in seconds that the "Sensitivity"
+    // Defaults false (unlike concealer_enabled above) - noise is opt-in.
+    noise_enabled: cfg.noiseEnabled ?? false,
+    // "Noise controls" panel's background bed - level (the "Noise level"
+    // dB fader, see main.js's dbToMultiplier), the EMA time constant in
+    // seconds that the "Sensitivity"
     // slider sets for the speech-shaped color specifically (how far back
     // its spectral envelope remembers - NOT a buffer size, and unused by
     // white/pink), and which of the three colors (see noise-generators.js
