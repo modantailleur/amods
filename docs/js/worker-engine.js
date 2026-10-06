@@ -32,14 +32,29 @@ let sourceVad = null;
 let remoteDenoiser = null;
 let sr = 48000;
 let debugTelemetry = false; // set from cfg.debugTelemetry - see docs/debug.html; gates the extra debugSnapshot() work in startStatusLoop below so plain index.html never pays for it
-// debug.html's "Visualization" panel's three spectrograms (Microphone/
-// Concealer/Noise) - only ever constructed when debugTelemetry is true
-// (see init() below), so a plain index.html session never pays for the
-// extra per-chunk FFT work (3x SpectrogramAnalyzer.computeColumn calls)
-// this needs. 90 matches the <canvas height="90"> set in debug.html - see
-// SpectrogramView's own comment for why the two must agree.
+// debug.html's "Visualization" panel's three spectrograms (Source/
+// Concealer/Noise) - only ever constructed while BOTH debugTelemetry is
+// true AND the panel's own "Visualization" toggle is on (vizEnabled, see
+// setVizEnabled below) - so a plain index.html session, or a debug.html
+// session with the toggle off, never pays for the extra per-chunk FFT
+// work (3x SpectrogramAnalyzer.computeColumn calls) or holds the three
+// analyzers' rolling buffers/mel filterbanks (~1.1MB total) in memory. A
+// real disconnect when toggled off, same reasoning as setConcealerEnabled/
+// setNoiseEnabled in stream.js - re-enabling starts the three analyzers
+// fresh (empty rolling buffers), same as a fresh session. 90 matches the
+// <canvas height="90"> set in debug.html - see SpectrogramView's own
+// comment for why the two must agree.
 const SPECTROGRAM_DISPLAY_BINS = 90;
+let vizEnabled = false;
 let specAnalyzers = null; // { mic, concealer, noise } once constructed
+
+function createSpecAnalyzers() {
+  return {
+    mic: new SpectrogramAnalyzer(sr, SPECTROGRAM_DISPLAY_BINS),
+    concealer: new SpectrogramAnalyzer(sr, SPECTROGRAM_DISPLAY_BINS),
+    noise: new SpectrogramAnalyzer(sr, SPECTROGRAM_DISPLAY_BINS),
+  };
+}
 
 async function init(cfg) {
   sr = cfg.sr;
@@ -48,13 +63,8 @@ async function init(cfg) {
   // main.js's own installDebugLogRelay('main') call never sees anything
   // logged in here - see debug-log.js for why both realms need their own.
   if (debugTelemetry) installDebugLogRelay('worker');
-  specAnalyzers = debugTelemetry
-    ? {
-        mic: new SpectrogramAnalyzer(cfg.sr, SPECTROGRAM_DISPLAY_BINS),
-        concealer: new SpectrogramAnalyzer(cfg.sr, SPECTROGRAM_DISPLAY_BINS),
-        noise: new SpectrogramAnalyzer(cfg.sr, SPECTROGRAM_DISPLAY_BINS),
-      }
-    : null;
+  vizEnabled = debugTelemetry && Boolean(cfg.vizEnabled);
+  specAnalyzers = vizEnabled ? createSpecAnalyzers() : null;
 
   // Three SEPARATE VAD instances, NEVER sharing one underlying model
   // session/module - sourceVad and concealerVad are called from genuinely
@@ -415,6 +425,16 @@ self.onmessage = (event) => {
       // (see stream.js's own comment) for a real disconnect - less RAM
       // and CPU while off, not just a muted output.
       if (stream) stream.setNoiseEnabled(msg.value);
+      break;
+    case 'setVizEnabled':
+      // Master on/off for the "Visualization" panel - see specAnalyzers'
+      // own comment above for why this actually constructs/drops the
+      // three SpectrogramAnalyzer instances (a real disconnect, less RAM
+      // and CPU while off) rather than just hiding the canvases. Only
+      // meaningful while debugTelemetry is true in the first place - a
+      // plain index.html session never sends this.
+      vizEnabled = debugTelemetry && Boolean(msg.value);
+      specAnalyzers = vizEnabled ? createSpecAnalyzers() : null;
       break;
     case 'setListenOriginal':
       if (stream) stream.streamConfig.listen_original = msg.value;

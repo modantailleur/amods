@@ -154,61 +154,68 @@
 
   <!-- Debug-only concealer visualization. main.js only updates this when
        window.DEBUG_MODE is true (see above) - inert markup otherwise. -->
-  <section class="panel" id="concealer-viz-panel">
-    <h2>Visualization</h2>
-
-    <div class="spectrogram-group">
-      <div class="spectrogram-row">
-        <span class="spectrogram-label">Source</span>
-        <canvas id="spec-mic" class="spectrogram-canvas" width="280" height="90"></canvas>
-      </div>
-      <div class="spectrogram-row concealer-dependent">
-        <span class="spectrogram-label">Concealer</span>
-        <canvas id="spec-concealer" class="spectrogram-canvas" width="280" height="90"></canvas>
-      </div>
-      <div class="spectrogram-row noise-dependent">
-        <span class="spectrogram-label">Noise</span>
-        <canvas id="spec-noise" class="spectrogram-canvas" width="280" height="90"></canvas>
-      </div>
+  <div class="section-group">
+    <div class="section-header">
+      <label class="toggle-switch">
+        <input type="checkbox" id="viz-enabled-toggle" checked />
+        <span class="toggle-slider"></span>
+      </label>
+      <h2 class="section-title">Visualization</h2>
     </div>
-
-    <div class="viz-branch concealer-dependent">
-      <h3>Concealing branch <span class="viz-branch-note">(real time)</span></h3>
-      <div class="viz-flow">
-        <div class="viz-block" id="viz-rt-vad"><span class="viz-status-dot"></span><span>Voice Activity</span></div>
-        <div class="viz-arrow">→</div>
-        <div class="viz-block" id="viz-selection">
-          <span class="viz-status-dot"></span><span>Concealer selection</span>
-          <span class="viz-dot viz-dot-empty" id="viz-selection-dot"></span>
+    <section class="panel viz-dependent" id="concealer-viz-panel">
+      <div class="spectrogram-group">
+        <div class="spectrogram-row">
+          <span class="spectrogram-label">Source</span>
+          <canvas id="spec-mic" class="spectrogram-canvas" width="280" height="90"></canvas>
+        </div>
+        <div class="spectrogram-row concealer-dependent">
+          <span class="spectrogram-label">Concealer</span>
+          <canvas id="spec-concealer" class="spectrogram-canvas" width="280" height="90"></canvas>
+        </div>
+        <div class="spectrogram-row noise-dependent">
+          <span class="spectrogram-label">Noise</span>
+          <canvas id="spec-noise" class="spectrogram-canvas" width="280" height="90"></canvas>
         </div>
       </div>
-    </div>
 
-    <div class="viz-branch concealer-dependent">
-      <h3>Memory branch <span class="viz-branch-note">(background)</span></h3>
-      <div class="viz-flow viz-flow-nowrap">
-        <div class="viz-block" id="viz-denoise"><span class="viz-status-dot"></span><span>Noise reduction</span></div>
-        <div class="viz-arrow">→</div>
-        <div class="viz-block" id="viz-mem-vad"><span class="viz-status-dot"></span><span>Voice Activity</span></div>
-        <div class="viz-arrow">→</div>
-        <div class="viz-dots" id="viz-candidates"></div>
+      <div class="viz-branch concealer-dependent">
+        <h3>Concealing branch <span class="viz-branch-note">(real time)</span></h3>
+        <div class="viz-flow">
+          <div class="viz-block" id="viz-rt-vad"><span class="viz-status-dot"></span><span>Voice Activity</span></div>
+          <div class="viz-arrow">→</div>
+          <div class="viz-block" id="viz-selection">
+            <span class="viz-status-dot"></span><span>Concealer selection</span>
+            <span class="viz-dot viz-dot-empty" id="viz-selection-dot"></span>
+          </div>
+        </div>
       </div>
-    </div>
 
-    <div class="viz-branch concealer-dependent">
-      <h3>Memory queue <span class="viz-branch-note">(oldest → newest)</span> <span id="viz-memory-count" class="viz-branch-note"></span></h3>
-      <div class="viz-dots viz-dots-wrap" id="viz-memory-dots"></div>
-    </div>
+      <div class="viz-branch concealer-dependent">
+        <h3>Memory branch <span class="viz-branch-note">(background)</span></h3>
+        <div class="viz-flow viz-flow-nowrap">
+          <div class="viz-block" id="viz-denoise"><span class="viz-status-dot"></span><span>Noise reduction</span></div>
+          <div class="viz-arrow">→</div>
+          <div class="viz-block" id="viz-mem-vad"><span class="viz-status-dot"></span><span>Voice Activity</span></div>
+          <div class="viz-arrow">→</div>
+          <div class="viz-dots" id="viz-candidates"></div>
+        </div>
+      </div>
 
-    <p class="viz-legend concealer-dependent">
-      <span class="viz-dot viz-dot-green"></span> passed
-      <span class="viz-dot viz-dot-red"></span> failed
-      <span class="viz-dot viz-dot-neutral"></span> available
-      <span class="viz-dot viz-dot-orange"></span> on hold
-      <span class="viz-dot viz-dot-blue"></span> active
-      <span class="viz-dot viz-dot-empty"></span> empty
-    </p>
-  </section>
+      <div class="viz-branch concealer-dependent">
+        <h3>Memory queue <span class="viz-branch-note">(oldest → newest)</span> <span id="viz-memory-count" class="viz-branch-note"></span></h3>
+        <div class="viz-dots viz-dots-wrap" id="viz-memory-dots"></div>
+      </div>
+
+      <p class="viz-legend concealer-dependent">
+        <span class="viz-dot viz-dot-green"></span> passed
+        <span class="viz-dot viz-dot-red"></span> failed
+        <span class="viz-dot viz-dot-neutral"></span> available
+        <span class="viz-dot viz-dot-orange"></span> on hold
+        <span class="viz-dot viz-dot-blue"></span> active
+        <span class="viz-dot viz-dot-empty"></span> empty
+      </p>
+    </section>
+  </div>
 
   <!-- Debug-only controls. main.js only wires these up when window.DEBUG_MODE
        is true (see above) - harmless/inert markup otherwise. -->

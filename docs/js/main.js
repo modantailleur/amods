@@ -90,6 +90,7 @@ const els = {
   listenOriginalToggle: document.getElementById('listen-original-toggle'),
   listenConcealerToggle: document.getElementById('listen-concealer-toggle'),
   listenNoiseToggle: document.getElementById('listen-noise-toggle'),
+  vizEnabledToggle: document.getElementById('viz-enabled-toggle'),
   specMicCanvas: document.getElementById('spec-mic'),
   specConcealerCanvas: document.getElementById('spec-concealer'),
   specNoiseCanvas: document.getElementById('spec-noise'),
@@ -682,6 +683,13 @@ async function ensureEngine() {
       // toggling it produce no audible change until this was fixed.
       monitorGain: 1.0,
       debugTelemetry: DEBUG_MODE,
+      // Master on/off for the "Visualization" panel - see worker-engine.js's
+      // own comment on vizEnabled/specAnalyzers for why this is a real
+      // disconnect (frees the three SpectrogramAnalyzers' rolling buffers/
+      // mel filterbanks, ~1.1MB, and stops the per-chunk FFT+filterbank
+      // work entirely), not just a hidden display. Only meaningful when
+      // debugTelemetry is true - index.html has no vizEnabledToggle at all.
+      vizEnabled: els.vizEnabledToggle ? els.vizEnabledToggle.checked : false,
       // Always the safe production default here, regardless of what the
       // debug toggles currently show - this engine is shared by BOTH mic and
       // debug sessions (see connectSource()), and ensureEngine() runs once,
@@ -1577,8 +1585,22 @@ function updateNoiseDependentVisibility() {
   });
 }
 
+// The "Visualization" panel's own master toggle (debug.html only -
+// els.vizEnabledToggle is null on index.html, which has no such element).
+// Collapses the whole panel body, independent of (and layered on top of)
+// updateConcealerDependentVisibility/updateNoiseDependentVisibility above -
+// those two keep working on whichever of Concealer/Noise's own rows are
+// inside it whenever this is visible.
+function updateVizDependentVisibility() {
+  const enabled = Boolean(els.vizEnabledToggle && els.vizEnabledToggle.checked);
+  document.querySelectorAll('.viz-dependent').forEach((el) => {
+    el.classList.toggle('is-hidden', !enabled);
+  });
+}
+
 updateConcealerDependentVisibility();
 updateNoiseDependentVisibility();
+if (DEBUG_MODE && els.vizEnabledToggle) updateVizDependentVisibility();
 
 // Master on/off toggles next to the "Concealer"/"Noise" sur-titles -
 // present on both index.html and debug.html, unlike the debug-only
@@ -1592,6 +1614,13 @@ els.noiseEnabledToggle.addEventListener('change', () => {
   updateNoiseDependentVisibility();
   if (worker && running) worker.postMessage({ type: 'setNoiseEnabled', value: els.noiseEnabledToggle.checked });
 });
+
+if (DEBUG_MODE && els.vizEnabledToggle) {
+  els.vizEnabledToggle.addEventListener('change', () => {
+    updateVizDependentVisibility();
+    if (worker && running) worker.postMessage({ type: 'setVizEnabled', value: els.vizEnabledToggle.checked });
+  });
+}
 
 if (DEBUG_MODE && els.listenOriginalToggle) {
   els.listenOriginalToggle.addEventListener('change', () => {

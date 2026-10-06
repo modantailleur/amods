@@ -259,7 +259,8 @@ h1 {
    so letting the rest of the page reflow is preferable to a permanent gap
    while a whole feature section sits unused. */
 .concealer-dependent.is-hidden,
-.noise-dependent.is-hidden {
+.noise-dependent.is-hidden,
+.viz-dependent.is-hidden {
   display: none;
 }
 
