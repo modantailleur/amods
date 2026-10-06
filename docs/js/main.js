@@ -1555,14 +1555,41 @@ els.concLevel.addEventListener('input', () => {
   if (worker && running) worker.postMessage({ type: 'setConcMultiplier', value: mult });
 });
 
+// Collapses (display: none, see style.css) everything that's only
+// meaningful while its section is on - Concealer/Noise controls+level
+// panels on both pages, plus (debug.html only, .concealer-dependent/
+// .noise-dependent elements simply don't exist on index.html) the
+// matching spectrogram row and the concealing/memory-branch viz sections.
+// Unlike updateNoiseTypeDependentVisibility above, no space is reserved -
+// the toggle can flip back on any time, so there's no "stays the same
+// shape" case to preserve a gap for.
+function updateConcealerDependentVisibility() {
+  const enabled = els.concealerEnabledToggle.checked;
+  document.querySelectorAll('.concealer-dependent').forEach((el) => {
+    el.classList.toggle('is-hidden', !enabled);
+  });
+}
+
+function updateNoiseDependentVisibility() {
+  const enabled = els.noiseEnabledToggle.checked;
+  document.querySelectorAll('.noise-dependent').forEach((el) => {
+    el.classList.toggle('is-hidden', !enabled);
+  });
+}
+
+updateConcealerDependentVisibility();
+updateNoiseDependentVisibility();
+
 // Master on/off toggles next to the "Concealer"/"Noise" sur-titles -
 // present on both index.html and debug.html, unlike the debug-only
 // listen toggles below, so no DEBUG_MODE gate here.
 els.concealerEnabledToggle.addEventListener('change', () => {
+  updateConcealerDependentVisibility();
   if (worker && running) worker.postMessage({ type: 'setConcealerEnabled', value: els.concealerEnabledToggle.checked });
 });
 
 els.noiseEnabledToggle.addEventListener('change', () => {
+  updateNoiseDependentVisibility();
   if (worker && running) worker.postMessage({ type: 'setNoiseEnabled', value: els.noiseEnabledToggle.checked });
 });
 

@@ -41,7 +41,7 @@
       </label>
       <h2 class="section-title">Concealer</h2>
     </div>
-    <div class="panel-row">
+    <div class="panel-row concealer-dependent">
       <section class="panel concealer-controls-panel">
         <h2>Concealer controls</h2>
         <div class="row">
@@ -99,7 +99,7 @@
       </label>
       <h2 class="section-title">Noise</h2>
     </div>
-    <div class="panel-row">
+    <div class="panel-row noise-dependent">
       <section class="panel noise-controls-panel">
         <h2>Noise controls</h2>
         <div class="row">
@@ -162,17 +162,17 @@
         <span class="spectrogram-label">Source</span>
         <canvas id="spec-mic" class="spectrogram-canvas" width="280" height="90"></canvas>
       </div>
-      <div class="spectrogram-row">
+      <div class="spectrogram-row concealer-dependent">
         <span class="spectrogram-label">Concealer</span>
         <canvas id="spec-concealer" class="spectrogram-canvas" width="280" height="90"></canvas>
       </div>
-      <div class="spectrogram-row">
+      <div class="spectrogram-row noise-dependent">
         <span class="spectrogram-label">Noise</span>
         <canvas id="spec-noise" class="spectrogram-canvas" width="280" height="90"></canvas>
       </div>
     </div>
 
-    <div class="viz-branch">
+    <div class="viz-branch concealer-dependent">
       <h3>Concealing branch <span class="viz-branch-note">(real time)</span></h3>
       <div class="viz-flow">
         <div class="viz-block" id="viz-rt-vad"><span class="viz-status-dot"></span><span>Voice Activity</span></div>
@@ -184,7 +184,7 @@
       </div>
     </div>
 
-    <div class="viz-branch">
+    <div class="viz-branch concealer-dependent">
       <h3>Memory branch <span class="viz-branch-note">(background)</span></h3>
       <div class="viz-flow viz-flow-nowrap">
         <div class="viz-block" id="viz-denoise"><span class="viz-status-dot"></span><span>Noise reduction</span></div>
@@ -195,12 +195,12 @@
       </div>
     </div>
 
-    <div class="viz-branch">
+    <div class="viz-branch concealer-dependent">
       <h3>Memory queue <span class="viz-branch-note">(oldest → newest)</span> <span id="viz-memory-count" class="viz-branch-note"></span></h3>
       <div class="viz-dots viz-dots-wrap" id="viz-memory-dots"></div>
     </div>
 
-    <p class="viz-legend">
+    <p class="viz-legend concealer-dependent">
       <span class="viz-dot viz-dot-green"></span> passed
       <span class="viz-dot viz-dot-red"></span> failed
       <span class="viz-dot viz-dot-neutral"></span> available

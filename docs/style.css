@@ -250,6 +250,19 @@ h1 {
   visibility: hidden;
 }
 
+/* Concealer/Noise controls+level panels, and (debug.html only) the
+   Concealer/Noise spectrograms and the concealing/memory-branch viz
+   sections - unlike .noise-type-dependent above, these actually collapse
+   (display: none, not visibility: hidden) when their section's master
+   toggle is off: there's no "same shape, different content" case to keep
+   space reserved for here (the toggle can be flipped back on any time),
+   so letting the rest of the page reflow is preferable to a permanent gap
+   while a whole feature section sits unused. */
+.concealer-dependent.is-hidden,
+.noise-dependent.is-hidden {
+  display: none;
+}
+
 .warning {
   color: #cc5500;
   font-size: 0.8rem;
