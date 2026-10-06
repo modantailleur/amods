@@ -77,6 +77,7 @@ const els = {
   debugProgressFill: document.getElementById('debug-progress-fill'),
   listenOriginalToggle: document.getElementById('listen-original-toggle'),
   listenConcealerToggle: document.getElementById('listen-concealer-toggle'),
+  listenNoiseToggle: document.getElementById('listen-noise-toggle'),
   vizRtVad: document.getElementById('viz-rt-vad'),
   vizSelection: document.getElementById('viz-selection'),
   vizSelectionDot: document.getElementById('viz-selection-dot'),
@@ -622,6 +623,7 @@ async function ensureEngine() {
       // source actually ends up connected first.
       listenOriginal: false,
       listenConcealer: true,
+      listenNoise: true,
     },
   });
 
@@ -724,23 +726,29 @@ async function connectSource(newSource) {
   activeSource = newSource;
   debugMode = newSource === 'debug'; // kept in sync for any other code still reading it
 
-  // The "Source track"/"Concealer track" playback toggles only exist in
-  // debug.html's DOM and are meant to apply ONLY to debug replay - the mic
-  // path must always sound exactly like production, regardless of whatever
-  // those checkboxes currently show (they're debug.html-only controls with
-  // no equivalent/visibility on index.html, so there'd be no way to even
-  // notice or fix an unwanted mic-path change if this weren't enforced).
-  // Explicitly re-asserting the right value HERE, on every source switch,
-  // is what makes that true rather than merely "true until you touch a
-  // checkbox while mic is active" - see the toggles' own change listeners,
-  // which mirror this same reasoning for the live-adjustment case.
+  // The "Source track"/"Concealer track"/"Noise track" playback toggles
+  // only exist in debug.html's DOM and are meant to apply ONLY to debug
+  // replay - the mic path must always sound exactly like production,
+  // regardless of whatever those checkboxes currently show (they're
+  // debug.html-only controls with no equivalent/visibility on index.html,
+  // so there'd be no way to even notice or fix an unwanted mic-path
+  // change if this weren't enforced). Explicitly re-asserting the right
+  // value HERE, on every source switch, is what makes that true rather
+  // than merely "true until you touch a checkbox while mic is active" -
+  // see the toggles' own change listeners, which mirror this same
+  // reasoning for the live-adjustment case. Production's real value for
+  // "Noise track" is true (unlike the other two) - the noise bed is
+  // always meant to be audible in production when its own level is above
+  // zero; only debug replay defaults it off for A/B comparison.
   if (worker) {
     if (newSource === 'debug') {
       worker.postMessage({ type: 'setListenOriginal', value: els.listenOriginalToggle?.checked ?? false });
       worker.postMessage({ type: 'setListenConcealer', value: els.listenConcealerToggle?.checked ?? true });
+      worker.postMessage({ type: 'setListenNoise', value: els.listenNoiseToggle?.checked ?? false });
     } else {
       worker.postMessage({ type: 'setListenOriginal', value: false });
       worker.postMessage({ type: 'setListenConcealer', value: true });
+      worker.postMessage({ type: 'setListenNoise', value: true });
     }
   }
 }
@@ -1475,6 +1483,14 @@ if (DEBUG_MODE && els.listenConcealerToggle) {
   els.listenConcealerToggle.addEventListener('change', () => {
     if (worker && running && activeSource === 'debug') {
       worker.postMessage({ type: 'setListenConcealer', value: els.listenConcealerToggle.checked });
+    }
+  });
+}
+
+if (DEBUG_MODE && els.listenNoiseToggle) {
+  els.listenNoiseToggle.addEventListener('change', () => {
+    if (worker && running && activeSource === 'debug') {
+      worker.postMessage({ type: 'setListenNoise', value: els.listenNoiseToggle.checked });
     }
   });
 }

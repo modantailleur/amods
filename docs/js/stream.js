@@ -155,14 +155,20 @@ export class ConcealerStream {
     // listen to, for whenever recording is wired up.
     const listenOriginal = this.streamConfig.listen_original ?? false;
     const listenConcealer = this.streamConfig.listen_concealer ?? true;
+    // Same gate as listenOriginal/listenConcealer, same reasoning - lets
+    // the "Noise track" debug toggle A/B whether the noise bed is
+    // audible without touching the "Noise" level slider itself. Unlike
+    // those two, defaults to true (production always has the noise bed
+    // audible whenever its own level is above zero - this is a debug-only
+    // A/B control, not a feature production needs an opinion on).
+    const listenNoise = this.streamConfig.listen_noise ?? true;
 
     // The noise bed is its own third layer, neither "the concealer" nor
-    // "the original mic" - always included (when its own level is above
-    // zero) in both the audible and recorded mixes, same as concBlock is
-    // for recSum, rather than gated by listenOriginal/listenConcealer.
-    // conc_multiplier is the SAME "Concealer level" dB fader concBlock's
-    // own mult already used above, per explicit request that one control
-    // governs both.
+    // "the original mic" - always included in recSum (when its own level
+    // is above zero), same as concBlock is, rather than gated the way
+    // playSum's copy is by listenNoise above. conc_multiplier is the SAME
+    // "Concealer level" dB fader concBlock's own mult already used above,
+    // per explicit request that one control governs both.
     const noiseBlock = activeNoise.nextBlock(frames);
     const noiseGain = (this.streamConfig.concealing_noise_level ?? 0) * this.streamConfig.conc_multiplier;
 
@@ -170,7 +176,7 @@ export class ConcealerStream {
     const recSum = new Float32Array(frames);
     for (let i = 0; i < frames; i++) {
       const noiseSample = noiseBlock[i] * noiseGain;
-      playSum[i] = (listenOriginal ? playMic[i] : 0) + (listenConcealer ? concBlock[i] : 0) + noiseSample;
+      playSum[i] = (listenOriginal ? playMic[i] : 0) + (listenConcealer ? concBlock[i] : 0) + (listenNoise ? noiseSample : 0);
       recSum[i] = recMic[i] + concBlock[i] + noiseSample;
     }
 

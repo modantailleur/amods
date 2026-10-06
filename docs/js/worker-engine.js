@@ -140,9 +140,13 @@ async function init(cfg) {
     // Debug-only listen toggles (see docs/debug.html) - index.html has no UI
     // for these, so they just stay at these defaults (concealer-only, same
     // as production always sounded before this existed) for every real
-    // session.
+    // session. listen_noise defaults to true (not false, unlike the other
+    // two) - production always has the noise bed audible when its own
+    // level is above zero; "Noise track" is a debug-only A/B toggle, not
+    // something production itself needs an opinion on muting by default.
     listen_original: cfg.listenOriginal ?? false,
     listen_concealer: cfg.listenConcealer ?? true,
+    listen_noise: cfg.listenNoise ?? true,
   };
   stream = new ConcealerStream(streamConfig, sourceVad, concealer, debugTelemetry);
 
@@ -334,6 +338,9 @@ self.onmessage = (event) => {
       break;
     case 'setListenConcealer':
       if (stream) stream.streamConfig.listen_concealer = msg.value;
+      break;
+    case 'setListenNoise':
+      if (stream) stream.streamConfig.listen_noise = msg.value;
       break;
     case 'setConcealingThreshold':
       if (sourceVad) sourceVad.logitThreshold = msg.value;
