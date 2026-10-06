@@ -454,6 +454,16 @@ select {
     justify-self: end;
     margin-top: 2px;
   }
+
+  /* The canvases' own pixel width is fixed (see .spectrogram-canvas's own
+     comment on why), so on a narrow phone there isn't room for a
+     side-by-side label too - stack the label above instead of shrinking
+     or stretching the canvas. */
+  .spectrogram-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
 }
 
 /* Concealer visualization (docs/debug.html only) - purely illustrative,
@@ -466,6 +476,47 @@ select {
      .viz-dot below), so changing it here resizes all of them together.
      15px = 1.5x the base 10px. */
   --viz-dot-size: 15px;
+}
+
+/* Live log-spectrograms (Microphone/Concealer/Noise) - see
+   spectrogram.js's own header for the analysis/rendering split. Each
+   canvas's pixel width/height are its actual drawing resolution (no CSS
+   scaling - see SpectrogramView's own comment on why that matters for a
+   per-pixel scrolling render), so this only controls their on-page
+   spacing/framing, not their resolution. */
+.spectrogram-group {
+  margin-bottom: 14px;
+}
+
+.spectrogram-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-block: 6px;
+}
+
+.spectrogram-label {
+  flex: 0 0 80px;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.spectrogram-canvas {
+  /* Deliberately NOT width:100%/height:auto - this canvas's HTML
+     width/height attributes ARE its real pixel buffer (see
+     spectrogram.js's SpectrogramView), and each new column is only ever 1
+     real pixel wide; stretching the display size away from that via CSS
+     would blur/distort the per-pixel scroll. Fixed size, not responsive. */
+  flex: none;
+  border-radius: 4px;
+  background: #000;
+  display: block;
+}
+
+.spectrogram-hint {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin: 4px 0 0 0;
 }
 
 .viz-branch {

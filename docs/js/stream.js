@@ -120,7 +120,7 @@ export class ConcealerStream {
 
   /**
    * x: Float32Array, one audio block (mono) at streamConfig.sr.
-   * Returns { playMix: Float32Array (mono), recMix: Float32Array (mono), voiceName: string, concealerBlock: Float32Array }.
+   * Returns { playMix, recMix: Float32Array (mono), voiceName: string, micBlock, concealerBlock, noiseBlock: Float32Array (mono, unmixed per-track signals) }.
    * The caller (worker-engine.js) is responsible for recording/tiling to
    * channels_out and for anything Stream.py's record_mode handled - this
    * port has no on-disk recording (no filesystem in a browser tab the way
@@ -229,6 +229,11 @@ export class ConcealerStream {
 
     const playSum = new Float32Array(frames);
     const recSum = new Float32Array(frames);
+    // Gain-applied noise contribution, per sample - built as its own array
+    // (not just an inline scalar in the loop below) so it can be returned
+    // for debug.html's "Visualization" spectrograms (see worker-engine.js's
+    // drainQueue), the same unmixed-per-track role concBlock already plays.
+    const noiseContributionBlock = new Float32Array(frames);
     for (let i = 0; i < frames; i++) {
       // concBlock is already guaranteed all-zero while concealerEnabled is
       // false (see setConcealerEnabled - nothing adds to pendingConc while
@@ -237,6 +242,7 @@ export class ConcealerStream {
       // intent explicit here too.
       const concContribution = this.concealerEnabled ? concBlock[i] : 0;
       const noiseContribution = noiseBlock ? noiseBlock[i] * noiseGain : 0;
+      noiseContributionBlock[i] = noiseContribution;
       playSum[i] = (listenOriginal ? playMic[i] : 0) + (listenConcealer ? concContribution : 0) + (listenNoise ? noiseContribution : 0);
       recSum[i] = recMic[i] + concContribution + noiseContribution;
     }
@@ -254,7 +260,13 @@ export class ConcealerStream {
     const budgetMs = (frames / sr) * 1000;
     if (elapsedMs > budgetMs) this._callbackSlowCount += 1;
 
-    return { playMix, recMix, voiceName, concealerBlock: concBlock };
+    // micBlock/concealerBlock/noiseBlock: the three unmixed per-track
+    // signals (debug.html's "Visualization" spectrograms read these - see
+    // worker-engine.js's drainQueue). Each reflects its own section's
+    // master enabled/disabled state (silent when off) but NOT the debug-
+    // only listen toggles - the point is to show what each track is
+    // actually producing, not just whatever you currently have audible.
+    return { playMix, recMix, voiceName, micBlock: x, concealerBlock: concBlock, noiseBlock: noiseContributionBlock };
   }
 
   /** Pop and reset the average/max/slow-count callback-time stats (mirrors Stream.pop_callback_timing). */

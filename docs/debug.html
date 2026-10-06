@@ -143,7 +143,22 @@
   <!-- Debug-only concealer visualization. main.js only updates this when
        window.DEBUG_MODE is true (see above) - inert markup otherwise. -->
   <section class="panel" id="concealer-viz-panel">
-    <h2>Concealer visualization</h2>
+    <h2>Visualization</h2>
+
+    <div class="spectrogram-group">
+      <div class="spectrogram-row">
+        <span class="spectrogram-label">Source</span>
+        <canvas id="spec-mic" class="spectrogram-canvas" width="280" height="90"></canvas>
+      </div>
+      <div class="spectrogram-row">
+        <span class="spectrogram-label">Concealer</span>
+        <canvas id="spec-concealer" class="spectrogram-canvas" width="280" height="90"></canvas>
+      </div>
+      <div class="spectrogram-row">
+        <span class="spectrogram-label">Noise</span>
+        <canvas id="spec-noise" class="spectrogram-canvas" width="280" height="90"></canvas>
+      </div>
+    </div>
 
     <div class="viz-branch">
       <h3>Concealing branch <span class="viz-branch-note">(real time)</span></h3>

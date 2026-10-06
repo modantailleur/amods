@@ -24,6 +24,7 @@ import { ConcealerStream } from './stream.js';
 import { RemoteDenoiser } from './denoiser-proxy.js';
 import { applyFadeIn } from './audio-utils.js';
 import { installDebugLogRelay } from './debug-log.js';
+import { SpectrogramAnalyzer } from './spectrogram.js';
 
 let stream = null;
 let concealer = null;
@@ -31,6 +32,14 @@ let sourceVad = null;
 let remoteDenoiser = null;
 let sr = 48000;
 let debugTelemetry = false; // set from cfg.debugTelemetry - see docs/debug.html; gates the extra debugSnapshot() work in startStatusLoop below so plain index.html never pays for it
+// debug.html's "Visualization" panel's three spectrograms (Microphone/
+// Concealer/Noise) - only ever constructed when debugTelemetry is true
+// (see init() below), so a plain index.html session never pays for the
+// extra per-chunk FFT work (3x SpectrogramAnalyzer.computeColumn calls)
+// this needs. 90 matches the <canvas height="90"> set in debug.html - see
+// SpectrogramView's own comment for why the two must agree.
+const SPECTROGRAM_DISPLAY_BINS = 90;
+let specAnalyzers = null; // { mic, concealer, noise } once constructed
 
 async function init(cfg) {
   sr = cfg.sr;
@@ -39,6 +48,13 @@ async function init(cfg) {
   // main.js's own installDebugLogRelay('main') call never sees anything
   // logged in here - see debug-log.js for why both realms need their own.
   if (debugTelemetry) installDebugLogRelay('worker');
+  specAnalyzers = debugTelemetry
+    ? {
+        mic: new SpectrogramAnalyzer(cfg.sr, SPECTROGRAM_DISPLAY_BINS),
+        concealer: new SpectrogramAnalyzer(cfg.sr, SPECTROGRAM_DISPLAY_BINS),
+        noise: new SpectrogramAnalyzer(cfg.sr, SPECTROGRAM_DISPLAY_BINS),
+      }
+    : null;
 
   // Two SEPARATE VAD instances, NEVER sharing one underlying model
   // session/module - sourceVad and concealerVad are called from genuinely
@@ -299,13 +315,27 @@ async function drainQueue() {
   if (!item) return;
   processing = true;
   try {
-    let { playMix } = await stream.processChunk(item.chunk);
+    let { playMix, micBlock, concealerBlock, noiseBlock } = await stream.processChunk(item.chunk);
     // Debug-visualization only - sent every chunk (~50ms), unconditionally
     // (not gated on staleMs below - that only decides whether THIS chunk's
     // audio is still worth playing, not whether the dot's state is still
     // worth showing), so the on-screen dot reacts at real detection speed
     // instead of only refreshing once per ~500ms status poll.
     if (debugTelemetry) postMessage({ type: 'rtVad', voiceActive: stream.lastVoiceActivity });
+    // debug.html's "Visualization" spectrograms - same unconditional-every-
+    // chunk cadence as rtVad above, for smooth scrolling. specAnalyzers is
+    // only non-null when debugTelemetry is true (see init()), so this is a
+    // single cheap null-check on a plain index.html session, not a branch
+    // that still does the FFT work and discards it.
+    if (specAnalyzers) {
+      specAnalyzers.mic.push(micBlock);
+      specAnalyzers.concealer.push(concealerBlock);
+      specAnalyzers.noise.push(noiseBlock);
+      const mic = specAnalyzers.mic.computeColumn();
+      const concealerCol = specAnalyzers.concealer.computeColumn();
+      const noise = specAnalyzers.noise.computeColumn();
+      postMessage({ type: 'specFrame', mic, concealer: concealerCol, noise }, [mic.buffer, concealerCol.buffer, noise.buffer]);
+    }
     const staleMs = performance.now() - item.arrivedAt;
     if (staleMs <= MAX_STALE_MS) {
       if (hadSkip) {

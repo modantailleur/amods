@@ -11,6 +11,7 @@
 import { applyFade } from './audio-utils.js';
 import { DENOISER_MODEL_PATHS } from './denoiser-models.js';
 import { installDebugLogRelay } from './debug-log.js';
+import { SpectrogramView } from './spectrogram.js';
 
 // Set by debug.html (never by index.html) before this module loads. Gates
 // every debug-only feature below so the production page never wires any of
@@ -26,6 +27,12 @@ const DEBUG_AUDIO_PATH = './audios/test.wav';
 if (DEBUG_MODE) installDebugLogRelay('main');
 
 const CHUNK_SIZE_AT_48K = 2400; // 50ms, matches stream_config.buffer_duration in the Python default config
+
+// How much history each spectrogram's fixed pixel width shows - a "zoom"
+// setting (SpectrogramView.setTimeScale), not a resolution one: the
+// Worker still produces one new column per chunk either way regardless
+// of this value.
+const SPECTROGRAM_TARGET_SECONDS = 2;
 
 // "Ping" test tone - same constants as amods.gui (PING_FREQUENCY_HZ etc.).
 const PING_FREQUENCY_HZ = 440.0;
@@ -80,6 +87,9 @@ const els = {
   listenOriginalToggle: document.getElementById('listen-original-toggle'),
   listenConcealerToggle: document.getElementById('listen-concealer-toggle'),
   listenNoiseToggle: document.getElementById('listen-noise-toggle'),
+  specMicCanvas: document.getElementById('spec-mic'),
+  specConcealerCanvas: document.getElementById('spec-concealer'),
+  specNoiseCanvas: document.getElementById('spec-noise'),
   vizRtVad: document.getElementById('viz-rt-vad'),
   vizSelection: document.getElementById('viz-selection'),
   vizSelectionDot: document.getElementById('viz-selection-dot'),
@@ -89,6 +99,19 @@ const els = {
   vizMemoryDots: document.getElementById('viz-memory-dots'),
   vizMemoryCount: document.getElementById('viz-memory-count'),
 };
+
+// debug.html's "Visualization" spectrograms - index.html has no canvases
+// for these (specMicCanvas etc. are all null there), so this stays null
+// and the worker's own specAnalyzers never even get constructed (see
+// worker-engine.js's init()) - a plain production session pays nothing
+// for this feature either side of the postMessage boundary.
+const specViews = DEBUG_MODE && els.specMicCanvas
+  ? {
+      mic: new SpectrogramView(els.specMicCanvas),
+      concealer: new SpectrogramView(els.specConcealerCanvas),
+      noise: new SpectrogramView(els.specNoiseCanvas),
+    }
+  : null;
 
 let audioContext = null; // the real session's AudioContext (Start/Stop)
 let micStream = null;
@@ -495,8 +518,32 @@ async function preloadModels() {
 async function ensureEngine() {
   if (running) return;
 
+  // Fresh spectrograms for a genuinely new engine session - this guard
+  // (just like the worker/AudioContext construction below it) only ever
+  // runs once per Start press, not on every connectSource source switch.
+  if (specViews) {
+    specViews.mic.clear();
+    specViews.concealer.clear();
+    specViews.noise.clear();
+  }
+
   audioContext = new AudioContext();
   const sr = audioContext.sampleRate;
+
+  // Each chunk is CHUNK_SIZE_AT_48K SAMPLES, not a fixed duration - its
+  // actual length in time depends on the real device sample rate (see
+  // CHUNK_SIZE_AT_48K's own comment), so columns-per-second needs sr to
+  // be known precisely rather than assumed. SPECTROGRAM_TARGET_SECONDS
+  // (how much total time each spectrogram's fixed pixel width should
+  // show - a "zoom" setting, not a resolution one: the Worker still
+  // produces one new column per chunk either way, see worker-engine.js)
+  // is set once here, not touched again per redraw.
+  if (specViews) {
+    const columnsPerSecond = sr / CHUNK_SIZE_AT_48K;
+    specViews.mic.setTimeScale(columnsPerSecond, SPECTROGRAM_TARGET_SECONDS);
+    specViews.concealer.setTimeScale(columnsPerSecond, SPECTROGRAM_TARGET_SECONDS);
+    specViews.noise.setTimeScale(columnsPerSecond, SPECTROGRAM_TARGET_SECONDS);
+  }
 
   await audioContext.audioWorklet.addModule('./js/worklet-processor.js');
   workletNode = new AudioWorkletNode(audioContext, 'concealer-worklet-processor', {
@@ -544,6 +591,12 @@ async function ensureEngine() {
       // updateStatus/updateConcealerViz are) since drainQueue itself simply
       // doesn't run while paused, so this naturally freezes on its own.
       if (els.vizRtVad) els.vizRtVad.classList.toggle('viz-block-active', Boolean(msg.voiceActive));
+    } else if (msg.type === 'specFrame' && specViews) {
+      // Same "every chunk, not gated on paused" reasoning as rtVad above -
+      // drainQueue stops producing these on its own once paused.
+      specViews.mic.pushColumn(msg.mic);
+      specViews.concealer.pushColumn(msg.concealer);
+      specViews.noise.pushColumn(msg.noise);
     }
   };
   workletNode.port.onmessage = (event) => {
