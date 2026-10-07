@@ -260,7 +260,12 @@ function startStatusLoop() {
     // per-chunk 'rtVad' message below, which is what the dot actually reacts
     // to now (~50ms cadence instead of this 500ms poll).
     const debug = debugTelemetry ? concealer.debugSnapshot() : undefined;
-    postMessage({ type: 'status', status, timing, debug });
+    // null whenever there's nothing worth showing (Speaker mode off, ramp
+    // not started yet, or already finished) - see stream.js's own comment
+    // on getConcealerRampStatus/CONCEALER_RAMP_SECONDS. Read-only (polling
+    // this every ~500ms for the UI has no effect on the ramp itself).
+    const echoCalibration = stream.getConcealerRampStatus();
+    postMessage({ type: 'status', status, timing, debug, echoCalibration });
 
     // Accumulate this 500ms slice's timing into the ~5s [HEALTH] window
     // (see the accumulator declarations above) - timing was already popped

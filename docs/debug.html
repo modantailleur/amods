@@ -150,6 +150,11 @@
     <button id="stop-btn" disabled title="Stop" aria-label="Stop">⏹</button>
   </div>
 
+  <div id="echo-calibration-row" class="echo-calibration-card" hidden>
+    <p class="echo-calibration-text">Calibrating echo cancellation to your room — full strength in <strong id="echo-calibration-countdown">15s</strong></p>
+    <div class="progress-bar"><div id="echo-calibration-progress-fill" class="progress-fill"></div></div>
+  </div>
+
   <section class="status-panel">
     <div class="row"><span>Progress:</span><span id="progress">—</span></div>
     <div class="row"><span>Latency:</span><span id="latency">—</span></div>

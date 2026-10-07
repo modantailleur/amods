@@ -5,6 +5,43 @@ import { limitPeak } from './audio-utils.js';
 import { SpeechShapedNoise } from './speech-shaped-noise.js';
 import { WhiteNoiseGenerator, PinkNoiseGenerator } from './noise-generators.js';
 
+// "Soft start" for the Concealer specifically while Speaker mode's
+// EchoCanceller is still converging (see echo-canceller.js's own header -
+// AEC3 typically needs several seconds of real exposure to a non-trivial
+// render signal before it meaningfully cancels an echo; observed directly
+// in practice to be on the order of ~10s). Rather than reduce the VOLUME
+// of early concealer clips (which would mean AEC3 only ever sees a
+// systematically quieter echo, not a realistic one - and the point is for
+// it to learn the real room), this instead reduces how OFTEN a selected
+// clip actually gets mixed in at all during the ramp window - fewer
+// echo events for you to hear while things are still catastrophic, each
+// one at its normal, unmodified volume once it does play. The allowed
+// fraction ramps linearly from CONCEALER_RAMP_START_FRACTION up to 1.0
+// (every opportunity let through, the original/default behavior) over
+// CONCEALER_RAMP_SECONDS, using the same fractional-accumulator technique
+// as SpectrogramView.pushColumn (see spectrogram.js) so the long-run
+// average exactly matches the target fraction with no drift, rather than
+// random skipping or round-off bias toward always/never letting a given
+// moment through.
+//
+// The ramp clock starts from the first moment there's actually a clip to
+// maybe-play, not from when Speaker mode/the session itself started - that
+// distinction matters: GranSpeechMask's own memory-warm-up delay
+// (min_memory_to_conceal) already means no concealer output exists for a
+// while in a typical session regardless, so a clock that only starts once
+// there's real output to gate is what actually lines up with when the
+// "catastrophic" window begins, rather than potentially finishing the
+// ramp before concealing has even started.
+//
+// Deliberately NOT applied to the Noise bed (concealing_noise_level stays
+// exactly as set, at its normal rate) - unlike concealer clips (short,
+// intermittent bursts), Noise is continuous, which makes it a much
+// better/faster training signal for AEC3 to converge against in the first
+// place; thinning it out would only slow convergence down further,
+// working against this whole mechanism's own purpose.
+const CONCEALER_RAMP_SECONDS = 15;
+const CONCEALER_RAMP_START_FRACTION = 0.1; // only 1 in 10 opportunities let through at the very start
+
 export class ConcealerStream {
   /**
    * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_type, noise_shaped_purity }
@@ -70,6 +107,16 @@ export class ConcealerStream {
     // poll, specifically so the on-screen dot reacts at the same ~50ms
     // cadence real detection happens at, not in up-to-500ms-late steps.
     this.lastVoiceActivity = false;
+
+    // See this file's own CONCEALER_RAMP_SECONDS comment. _concealerFirstActiveAt:
+    // performance.now() timestamp of the first opportunity to maybe-play a
+    // concealer clip since Speaker mode turned on (or since the last time
+    // Concealer was disabled - see setConcealerEnabled), null until then.
+    // _concealerAllowAccumulator: the fractional accumulator itself (see
+    // _concealerShouldAllowOutput), carried between calls the same way
+    // SpectrogramView's own _shiftAccumulator is.
+    this._concealerFirstActiveAt = null;
+    this._concealerAllowAccumulator = 0;
   }
 
   resetState() {
@@ -119,7 +166,59 @@ export class ConcealerStream {
     if (!enabled) {
       this.pendingConc.fill(0);
       this.concealer.releaseMemory();
+      // Re-enabling later starts a fresh ramp (see CONCEALER_RAMP_SECONDS'
+      // own comment) - AEC3's convergence state may well have drifted
+      // during however long Concealer was off, so treating the next
+      // activation as a new "first output" moment is the conservative,
+      // consistent choice (same "resumes from empty" reasoning as the rest
+      // of this method).
+      this._concealerFirstActiveAt = null;
+      this._concealerAllowAccumulator = 0;
     }
+  }
+
+  /**
+   * true (always let it through) unless Speaker mode is on - see this
+   * file's own CONCEALER_RAMP_SECONDS comment for the full reasoning.
+   * Records its own start time on first call (the first opportunity to
+   * maybe-play a concealer clip), then ramps the allowed fraction linearly
+   * from CONCEALER_RAMP_START_FRACTION up to 1.0 (every opportunity) over
+   * CONCEALER_RAMP_SECONDS, via a carried-over fractional accumulator
+   * (same technique as SpectrogramView.pushColumn in spectrogram.js) so
+   * the long-run average exactly matches the target fraction with no
+   * drift. Call this exactly once per opportunity (it advances state).
+   */
+  _concealerShouldAllowOutput() {
+    if (!this.echoCanceller) return true;
+    const now = performance.now();
+    if (this._concealerFirstActiveAt === null) this._concealerFirstActiveAt = now;
+    const elapsedS = (now - this._concealerFirstActiveAt) / 1000;
+    const t = Math.min(1, elapsedS / CONCEALER_RAMP_SECONDS);
+    const allowFraction = CONCEALER_RAMP_START_FRACTION + (1 - CONCEALER_RAMP_START_FRACTION) * t;
+    this._concealerAllowAccumulator += allowFraction;
+    if (this._concealerAllowAccumulator >= 1) {
+      this._concealerAllowAccumulator -= 1;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Read-only status of the Concealer ramp (see CONCEALER_RAMP_SECONDS'
+   * own comment) for UI display - unlike _concealerShouldAllowOutput,
+   * never advances the accumulator or starts the clock itself, so polling
+   * this for a status display has no effect on the ramp's own behavior.
+   * Returns null whenever there's nothing worth showing: Speaker mode is
+   * off, the ramp hasn't started yet (Concealer has had no output to gate
+   * at all so far), or it already finished. Otherwise
+   * { remainingS, progressFraction } - progressFraction 0..1, how far
+   * through the ramp window elapsed time is.
+   */
+  getConcealerRampStatus() {
+    if (!this.echoCanceller || this._concealerFirstActiveAt === null) return null;
+    const elapsedS = (performance.now() - this._concealerFirstActiveAt) / 1000;
+    if (elapsedS >= CONCEALER_RAMP_SECONDS) return null;
+    return { remainingS: CONCEALER_RAMP_SECONDS - elapsedS, progressFraction: elapsedS / CONCEALER_RAMP_SECONDS };
   }
 
   /**
@@ -206,7 +305,13 @@ export class ConcealerStream {
       if (voiceActivity) {
         const { audio: concealerAudio, voiceName: vn } = await this.concealer.getConcealer(cancelledX);
         voiceName = vn;
-        if (concealerAudio) {
+        // _concealerShouldAllowOutput() is always true unless Speaker mode
+        // is on - see this file's own CONCEALER_RAMP_SECONDS comment. The
+        // clip was still selected/consumed above either way (getConcealer's
+        // own countdown/selection state advances the same regardless) -
+        // this only gates whether it's actually audible this time, at its
+        // normal, unmodified volume whenever it is.
+        if (concealerAudio && this._concealerShouldAllowOutput()) {
           const mult = this.streamConfig.conc_multiplier;
           for (let i = 0; i < concealerAudio.length && i < this.pendingConc.length; i++) {
             this.pendingConc[i] += concealerAudio[i] * mult;

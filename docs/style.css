@@ -23,6 +23,8 @@ body {
   .viz-dot-neutral { background: #40434a; }
   .toggle-slider { background: #40434a; }
   #debug-start-stop-btn, #debug-stop-btn { background: #26282d; border-color: #3a3d44; color: #9aa1ab; }
+  .echo-calibration-card { background: #1b2436 !important; border-color: #2d3e5c !important; }
+  .echo-calibration-text { color: #9db8ec; }
 }
 
 h1 {
@@ -406,6 +408,29 @@ input.vertical-fader {
   padding: 12px 16px;
   margin-top: 14px;
   font-size: 0.9rem;
+}
+
+/* "Speaker mode" calibration notice (see main.js's updateEchoCalibrationUI
+   and stream.js's CONCEALER_RAMP_SECONDS) - a light tint of the app's own
+   accent blue (#2f6fed, same as .progress-fill/#start-stop-btn) so it
+   reads as "a normal, expected part of startup", not a warning. */
+.echo-calibration-card {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: #eaf1fe;
+  border: 1px solid #c7d9fb;
+  border-radius: 8px;
+}
+
+.echo-calibration-text {
+  margin: 0 0 8px 0;
+  font-size: 0.85rem;
+  color: #2f4b8f;
+  text-align: center;
+}
+
+.echo-calibration-card .progress-bar {
+  margin-bottom: 0; /* this is the card's last element - .progress-bar's own bottom margin would just add unwanted space below it */
 }
 
 .status-panel .row {

@@ -83,6 +83,9 @@ const els = {
   status: document.getElementById('status'),
   progress: document.getElementById('progress'),
   latency: document.getElementById('latency'),
+  echoCalibrationRow: document.getElementById('echo-calibration-row'),
+  echoCalibrationCountdown: document.getElementById('echo-calibration-countdown'),
+  echoCalibrationProgressFill: document.getElementById('echo-calibration-progress-fill'),
   debugStartStopBtn: document.getElementById('debug-start-stop-btn'),
   debugStopBtn: document.getElementById('debug-stop-btn'),
   debugStatus: document.getElementById('debug-status'),
@@ -609,6 +612,7 @@ async function ensureEngine() {
       // re-rendering it.
       if (!paused) {
         updateStatus(msg.status, msg.timing);
+        updateEchoCalibrationUI(msg.echoCalibration);
         if (DEBUG_MODE && msg.debug) updateConcealerViz(msg.debug);
       }
     } else if (msg.type === 'error') {
@@ -963,6 +967,7 @@ function stop() {
   els.latency.textContent = '—';
   els.inLevelFill.style.width = '0%';
   els.outLevelFill.style.width = '0%';
+  updateEchoCalibrationUI(null);
   if (els.debugStatus) els.debugStatus.textContent = '';
   if (els.debugProgress) els.debugProgress.hidden = true;
   if (els.debugProgressFill) els.debugProgressFill.style.width = '0%';
@@ -1127,6 +1132,25 @@ function updateStatus(status, timing) {
   els.latency.textContent =
     `~${totalMs.toFixed(0)} ms  (in ${inMs.toFixed(0)} ms + out ${outMs.toFixed(0)} ms + algo ` +
     `${timing.avgMs.toFixed(1)}/${timing.maxMs.toFixed(1)} ms avg/max)`;
+}
+
+// Present on both index.html and debug.html (a real production concern,
+// not a debug-only one) - shows while stream.js's Concealer ramp is active
+// (see its own CONCEALER_RAMP_SECONDS comment), hidden the rest of the
+// time (calibration === null: Speaker mode off, ramp not started yet
+// because Concealer hasn't had anything to play, or already finished).
+function updateEchoCalibrationUI(calibration) {
+  if (!els.echoCalibrationRow) return;
+  if (!calibration) {
+    els.echoCalibrationRow.hidden = true;
+    return;
+  }
+  els.echoCalibrationRow.hidden = false;
+  const seconds = Math.max(1, Math.ceil(calibration.remainingS));
+  if (els.echoCalibrationCountdown) els.echoCalibrationCountdown.textContent = `${seconds}s`;
+  if (els.echoCalibrationProgressFill) {
+    els.echoCalibrationProgressFill.style.width = `${Math.round(calibration.progressFraction * 100)}%`;
+  }
 }
 
 // ── Concealer visualization (DEBUG_MODE only) ──────────────────────────────
