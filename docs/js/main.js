@@ -28,6 +28,15 @@ if (DEBUG_MODE) installDebugLogRelay('main');
 
 const CHUNK_SIZE_AT_48K = 2400; // 50ms, matches stream_config.buffer_duration in the Python default config
 
+// "Speaker mode"'s EchoCanceller works on smaller slices of mic input than
+// the rest of the pipeline (VAD, concealer selection, noise calibration -
+// see worker-engine.js's handleAecChunk and stream.js's processChunk) so it
+// can start cancelling a given slice of audio sooner, without changing the
+// cadence anything else runs at. 5 equal slices of CHUNK_SIZE_AT_48K each
+// (480 samples = 10ms @ 48kHz) - see worklet-processor.js's own comment on
+// aecChunkSize for where this actually gets used.
+const AEC_CAPTURE_SUBDIVISIONS = 5;
+
 // How much history each spectrogram's fixed pixel width shows - a "zoom"
 // setting (SpectrogramView.setTimeScale), not a resolution one: the
 // Worker still produces one new column per chunk either way regardless
@@ -587,12 +596,19 @@ async function ensureEngine() {
     specViews.noise.setTimeScale(columnsPerSecond, SPECTROGRAM_TARGET_SECONDS);
   }
 
+  // Fixed for the session, same as the rest of "Speaker mode" (see
+  // setControlsEnabled) - read once here, not touched again until the next
+  // Start. 0 (Speaker mode off) disables worklet-processor.js's finer-
+  // grained capture tap entirely - see its own aecChunkSize comment.
+  const speakerModeOn = Boolean(els.speakerModeToggle && els.speakerModeToggle.checked);
+  const aecChunkSize = speakerModeOn ? Math.round(CHUNK_SIZE_AT_48K / AEC_CAPTURE_SUBDIVISIONS) : 0;
+
   await audioContext.audioWorklet.addModule('./js/worklet-processor.js');
   workletNode = new AudioWorkletNode(audioContext, 'concealer-worklet-processor', {
     numberOfInputs: 1,
     numberOfOutputs: 1,
     outputChannelCount: [1],
-    processorOptions: { chunkSize: CHUNK_SIZE_AT_48K, outputRingSize: sr * 2 },
+    processorOptions: { chunkSize: CHUNK_SIZE_AT_48K, outputRingSize: sr * 2, aecChunkSize },
   });
 
   worker = new Worker('./js/worker-engine.js', { type: 'module' });
@@ -647,6 +663,11 @@ async function ensureEngine() {
     const msg = event.data;
     if (msg.type === 'chunk') {
       worker.postMessage({ type: 'chunk', chunk: msg.chunk }, [msg.chunk.buffer]);
+    } else if (msg.type === 'aecChunk') {
+      // "Speaker mode"'s finer-grained capture tap - see worklet-processor.js's
+      // own aecInputBuf comment and worker-engine.js's handleAecChunk. Only
+      // ever sent instead of (never alongside) 'chunk' above.
+      worker.postMessage({ type: 'aecChunk', chunk: msg.chunk }, [msg.chunk.buffer]);
     } else if (msg.type === 'levels') {
       els.inLevelFill.style.width = `${msg.in}%`;
       els.outLevelFill.style.width = `${msg.out}%`;
@@ -736,6 +757,10 @@ async function ensureEngine() {
       // init()); real production feature, present on both index.html and
       // debug.html - not a debugTelemetry-gated concern like vizEnabled above.
       speakerModeEnabled: Boolean(els.speakerModeToggle && els.speakerModeToggle.checked),
+      // So worker-engine.js's handleAecChunk knows how large a block to
+      // reassemble from the finer-grained aecChunk slices before handing
+      // it to the rest of the pipeline - see that function's own comment.
+      chunkSize: CHUNK_SIZE_AT_48K,
       // Always the safe production default here, regardless of what the
       // debug toggles currently show - this engine is shared by BOTH mic and
       // debug sessions (see connectSource()), and ensureEngine() runs once,

@@ -32,6 +32,7 @@ let concealer = null;
 let sourceVad = null;
 let remoteDenoiser = null;
 let sr = 48000;
+let chunkSize = 2400; // set from cfg.chunkSize - see handleAecChunk's own comment for why it needs this
 let debugTelemetry = false; // set from cfg.debugTelemetry - see docs/debug.html; gates the extra debugSnapshot() work in startStatusLoop below so plain index.html never pays for it
 // debug.html's "Visualization" panel's three spectrograms (Source/
 // Concealer/Noise) - only ever constructed while BOTH debugTelemetry is
@@ -64,6 +65,7 @@ function createSpecAnalyzers() {
 
 async function init(cfg) {
   sr = cfg.sr;
+  chunkSize = cfg.chunkSize ?? 2400;
   debugTelemetry = Boolean(cfg.debugTelemetry);
   // This Worker has its own separate console from the main thread's, so
   // main.js's own installDebugLogRelay('main') call never sees anything
@@ -357,11 +359,52 @@ let hadSkip = false;
 let skipCount = 0;
 const FADE_AFTER_SKIP_S = 0.01; // smooths the deliberate join back to fresh audio after a stale run was skipped - an intentional real-time trade-off, not a fix for lost data
 
+// "Speaker mode" off (the common case - see worklet-processor.js's own
+// aecChunkSize comment, which never sends 'aecChunk' messages at all while
+// it's off): unchanged from before Speaker mode existed - raw and
+// "cancelled" are the SAME reference, matching stream.js's processChunk's
+// own no-op contract for when cancelledX === x.
 async function handleChunk(chunk) {
   if (!stream) return;
   if (pendingQueue.length >= MAX_QUEUE) pendingQueue.shift();
-  pendingQueue.push({ chunk, arrivedAt: performance.now() });
+  pendingQueue.push({ raw: chunk, cancelled: chunk, arrivedAt: performance.now() });
   drainQueue();
+}
+
+// "Speaker mode" on: reassembles both a RAW and an echo-cancelled chunkSize
+// block from AEC_CAPTURE_SUBDIVISIONS (see main.js) consecutive, smaller
+// slices - each slice is run through echoCanceller.processCapture() AS
+// SOON AS IT ARRIVES, not held back until a whole chunkSize block has
+// accumulated the way handleChunk's single slice would be. That's the
+// entire point: it shortens the real latency between a given bit of mic
+// audio actually being captured and Speaker mode's EchoCanceller getting
+// to act on it, without changing the cadence anything else (VAD,
+// concealer selection - still fed the reassembled chunkSize blocks below,
+// once per chunkSize, exactly as before) runs at.
+let aecRawReassembly = null;
+let aecCancelledReassembly = null;
+let aecReassemblyPos = 0;
+
+async function handleAecChunk(slice) {
+  if (!stream || !stream.echoCanceller) return;
+  if (!aecRawReassembly) {
+    aecRawReassembly = new Float32Array(chunkSize);
+    aecCancelledReassembly = new Float32Array(chunkSize);
+    aecReassemblyPos = 0;
+  }
+  const cancelledSlice = await stream.echoCanceller.processCapture(slice);
+  aecRawReassembly.set(slice, aecReassemblyPos);
+  aecCancelledReassembly.set(cancelledSlice, aecReassemblyPos);
+  aecReassemblyPos += slice.length;
+  if (aecReassemblyPos >= chunkSize) {
+    const raw = aecRawReassembly;
+    const cancelled = aecCancelledReassembly;
+    aecRawReassembly = null;
+    aecCancelledReassembly = null;
+    if (pendingQueue.length >= MAX_QUEUE) pendingQueue.shift();
+    pendingQueue.push({ raw, cancelled, arrivedAt: performance.now() });
+    drainQueue();
+  }
 }
 
 async function drainQueue() {
@@ -370,7 +413,7 @@ async function drainQueue() {
   if (!item) return;
   processing = true;
   try {
-    let { playMix, micBlock, micAecBlock, concealerBlock, noiseBlock } = await stream.processChunk(item.chunk);
+    let { playMix, micBlock, micAecBlock, concealerBlock, noiseBlock } = await stream.processChunk(item.raw, item.cancelled);
     // Debug-visualization only - sent every chunk (~50ms), unconditionally
     // (not gated on staleMs below - that only decides whether THIS chunk's
     // audio is still worth playing, not whether the dot's state is still
@@ -431,6 +474,9 @@ self.onmessage = (event) => {
       break;
     case 'chunk':
       handleChunk(msg.chunk);
+      break;
+    case 'aecChunk':
+      handleAecChunk(msg.chunk);
       break;
     case 'setConcMultiplier':
       if (stream) stream.streamConfig.conc_multiplier = msg.value;

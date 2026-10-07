@@ -39,6 +39,13 @@ import { WhiteNoiseGenerator, PinkNoiseGenerator } from './noise-generators.js';
 // better/faster training signal for AEC3 to converge against in the first
 // place; thinning it out would only slow convergence down further,
 // working against this whole mechanism's own purpose.
+// Set to false to remove this whole mechanism - every opportunity is then
+// always let through immediately, same as if Speaker mode had no ramp at
+// all (the exact behavior from before CONCEALER_RAMP_SECONDS existed).
+// Nothing else needs changing - both _concealerShouldAllowOutput and
+// getConcealerRampStatus (and so the "Calibrating echo cancellation…" UI
+// card it feeds in main.js) check this first.
+const CONCEALER_RAMP_ENABLED = false;
 const CONCEALER_RAMP_SECONDS = 15;
 const CONCEALER_RAMP_START_FRACTION = 0.1; // only 1 in 10 opportunities let through at the very start
 
@@ -189,7 +196,7 @@ export class ConcealerStream {
    * drift. Call this exactly once per opportunity (it advances state).
    */
   _concealerShouldAllowOutput() {
-    if (!this.echoCanceller) return true;
+    if (!this.echoCanceller || !CONCEALER_RAMP_ENABLED) return true;
     const now = performance.now();
     if (this._concealerFirstActiveAt === null) this._concealerFirstActiveAt = now;
     const elapsedS = (now - this._concealerFirstActiveAt) / 1000;
@@ -215,14 +222,33 @@ export class ConcealerStream {
    * through the ramp window elapsed time is.
    */
   getConcealerRampStatus() {
-    if (!this.echoCanceller || this._concealerFirstActiveAt === null) return null;
+    if (!this.echoCanceller || !CONCEALER_RAMP_ENABLED || this._concealerFirstActiveAt === null) return null;
     const elapsedS = (performance.now() - this._concealerFirstActiveAt) / 1000;
     if (elapsedS >= CONCEALER_RAMP_SECONDS) return null;
     return { remainingS: CONCEALER_RAMP_SECONDS - elapsedS, progressFraction: elapsedS / CONCEALER_RAMP_SECONDS };
   }
 
   /**
-   * x: Float32Array, one audio block (mono) at streamConfig.sr.
+   * x: Float32Array, one audio block (mono) at streamConfig.sr - the RAW
+   * mic signal, used only for playMic/recMic and the micBlock return value
+   * (see their own comments below).
+   * cancelledX: Float32Array, same length as x - the signal everything
+   * else below (noise calibration, VAD, concealer selection) actually
+   * uses. While Speaker mode is off, the caller always passes cancelledX
+   * === x (see worker-engine.js's handleChunk), the exact original
+   * behavior from before "Speaker mode" existed. While it's on, the
+   * caller (worker-engine.js's handleAecChunk) has ALREADY run x through
+   * EchoCanceller.processCapture before processChunk is even called -
+   * see that function's own comment for why (processing smaller slices
+   * of x as they arrive, rather than waiting for this whole chunk to
+   * accumulate, shortens the real render->capture latency Speaker mode's
+   * AEC3 instance has to estimate and track). Without cancellation here
+   * one way or another, over real speakers, the concealer's own
+   * synthesized output - picked back up by the mic - would look just like
+   * fresh human speech to everything downstream: VAD fires on our own
+   * echo, the concealer might store it into memory or trigger MORE output
+   * in response to hearing itself - a recursive content feedback loop, a
+   * bigger problem than simple audible howling alone.
    * Returns { playMix, recMix: Float32Array (mono), voiceName: string, micBlock, micAecBlock (null unless Speaker mode is on), concealerBlock, noiseBlock: Float32Array (mono, unmixed per-track signals) }.
    * The caller (worker-engine.js) is responsible for recording/tiling to
    * channels_out and for anything Stream.py's record_mode handled - this
@@ -230,7 +256,7 @@ export class ConcealerStream {
    * amods.stream has); if recording is wanted later, capture playMix/recMix
    * here and encode client-side (e.g. via MediaRecorder or a WAV writer).
    */
-  async processChunk(x) {
+  async processChunk(x, cancelledX) {
     const t0 = performance.now();
     const frames = x.length;
 
@@ -242,20 +268,6 @@ export class ConcealerStream {
       this.__chunkCount = (this.__chunkCount || 0) + 1;
       if (this.__chunkCount % 40 === 0) console.error(`[STREAMDIAG] processChunk call#${this.__chunkCount}`);
     }
-
-    // Acoustic echo cancellation ("Speaker mode" - see echo-canceller.js's
-    // own header for the algorithm/citation/why). Replaces the raw mic
-    // signal with its own best estimate of "x with our own speaker output
-    // subtracted out" BEFORE anything else below (noise calibration, VAD,
-    // concealer selection) ever sees it. Without this, over real speakers,
-    // the concealer's own synthesized output - picked back up by the mic -
-    // would look just like fresh human speech to everything downstream:
-    // VAD fires on our own echo, the concealer might store it into memory
-    // or trigger MORE output in response to hearing itself - a recursive
-    // content feedback loop, a bigger problem than simple audible howling
-    // alone. null (the default, Speaker mode off) means this is a no-op -
-    // cancelledX === x, the exact original behavior from before this existed.
-    const cancelledX = this.echoCanceller ? await this.echoCanceller.processCapture(x) : x;
 
     // Fed (every chunk, regardless of concealing state) ONLY while Noise is
     // actually enabled - this._noiseGen is null otherwise (see the

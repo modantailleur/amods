@@ -10,7 +10,13 @@
 // mirrors Stream's own input_callback/output_callback + ring buffer split
 // (see stream.py), just relayed through the main thread once instead of
 // talking to the worker directly (an AudioWorkletProcessor's port can only
-// reach its owning AudioWorkletNode on the main thread).
+// reach its owning AudioWorkletNode on the main thread). While "Speaker
+// mode" is on, mic input is instead buffered into smaller aecChunkSize
+// pieces (see the constructor's own comment) so its EchoCanceller can
+// start working on a given slice of audio sooner than waiting for a whole
+// chunkSize block to accumulate - VAD/concealer selection/etc. still only
+// ever see reassembled chunkSize blocks either way (see worker-engine.js's
+// handleAecChunk), unaffected by this.
 // Matches amods.gui's LEVEL_METER_DB_RANGE / LEVEL_METER_MIN_UPDATE_INTERVAL
 // exactly: RMS-in-dBFS mapped onto this range gives a 0-100 bar value,
 // chosen so normal speech (roughly -25 to -15 dBFS) sits in the upper half
@@ -31,10 +37,25 @@ function levelFromSumSq(sumSq, count) {
 class ConcealerWorkletProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
-    const { chunkSize = 2400, outputRingSize = 48000 * 2 } = options.processorOptions || {};
+    const { chunkSize = 2400, outputRingSize = 48000 * 2, aecChunkSize = 0 } = options.processorOptions || {};
     this.chunkSize = chunkSize;
     this.inputBuf = new Float32Array(chunkSize);
     this.inputPos = 0;
+
+    // "Speaker mode" (see main.js's own AEC_CAPTURE_SUBDIVISIONS comment) -
+    // a finer-grained REPLACEMENT for the input tap above, not an addition
+    // to it (see process() below - it's one or the other, never both):
+    // flushed every aecChunkSize samples instead of chunkSize, so
+    // EchoCanceller.processCapture (see worker-engine.js's handleAecChunk)
+    // can start working on a given slice of mic audio well before the full
+    // chunkSize block it belongs to would otherwise have finished
+    // accumulating - up to (chunkSize-aecChunkSize) samples' worth of
+    // real latency saved on the capture side. 0 (the default, Speaker mode
+    // off) disables this entirely - aecInputBuf stays null, the original
+    // chunkSize-only behavior above runs unmodified, zero added cost.
+    this.aecChunkSize = aecChunkSize;
+    this.aecInputBuf = aecChunkSize > 0 ? new Float32Array(aecChunkSize) : null;
+    this.aecInputPos = 0;
 
     // Output ring buffer: filled by messages from the main thread (relayed
     // from the worker), drained sample-by-sample in process().
@@ -76,16 +97,28 @@ class ConcealerWorkletProcessor extends AudioWorkletProcessor {
 
     if (inCh) {
       for (let i = 0; i < inCh.length; i++) {
-        this.inputBuf[this.inputPos++] = inCh[i];
         this._inSumSq += inCh[i] * inCh[i];
         this._inCount++;
-        if (this.inputPos === this.chunkSize) {
-          // Transfer ownership of a fresh copy (postMessage with a
-          // Transferable ArrayBuffer - zero-copy) so the worklet's own
-          // buffer can keep being written to immediately.
-          const chunk = this.inputBuf.slice(0);
-          this.port.postMessage({ type: 'chunk', chunk }, [chunk.buffer]);
-          this.inputPos = 0;
+        // Either the fine-grained Speaker-mode tap or the normal one runs -
+        // see aecInputBuf's own comment for why these are alternatives, not
+        // both active together.
+        if (this.aecInputBuf) {
+          this.aecInputBuf[this.aecInputPos++] = inCh[i];
+          if (this.aecInputPos === this.aecChunkSize) {
+            const aecChunk = this.aecInputBuf.slice(0);
+            this.port.postMessage({ type: 'aecChunk', chunk: aecChunk }, [aecChunk.buffer]);
+            this.aecInputPos = 0;
+          }
+        } else {
+          this.inputBuf[this.inputPos++] = inCh[i];
+          if (this.inputPos === this.chunkSize) {
+            // Transfer ownership of a fresh copy (postMessage with a
+            // Transferable ArrayBuffer - zero-copy) so the worklet's own
+            // buffer can keep being written to immediately.
+            const chunk = this.inputBuf.slice(0);
+            this.port.postMessage({ type: 'chunk', chunk }, [chunk.buffer]);
+            this.inputPos = 0;
+          }
         }
       }
     }
