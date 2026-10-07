@@ -186,10 +186,10 @@ function dbToMultiplier(dbStr) {
 // concealer clip when it's split off and stored into memory (see
 // granspeechmask.js's _feedMemory) - a longer fade softens the clip's edges
 // more (smoother, but shaves more off the start/end), a shorter one leaves
-// them more abrupt. Maps the slider's 0..1 range onto 10ms..100ms in
+// them more abrupt. Maps the slider's 0..1 range onto 50ms..125ms in
 // seconds, matching GranSpeechMask's own fade_duration units.
 function smoothnessToFadeDuration(rateStr) {
-  return 0.01 + parseFloat(rateStr) * 0.09;
+  return 0.05 + parseFloat(rateStr) * 0.075;
 }
 
 // "Sensitivity" (the SpeechShapedNoise background bed's EMA time constant
