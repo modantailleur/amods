@@ -261,7 +261,8 @@ h1 {
 .concealer-dependent.is-hidden,
 .noise-dependent.is-hidden,
 .viz-dependent.is-hidden,
-.debug-dependent.is-hidden {
+.debug-dependent.is-hidden,
+.speaker-mode-dependent.is-hidden {
   display: none;
 }
 

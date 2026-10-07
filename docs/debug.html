@@ -31,6 +31,10 @@
     </div>
     <p id="feedback-warning" class="warning"></p>
     <p id="output-sink-warning" class="warning"></p>
+    <div class="row">
+      <label><input type="checkbox" id="speaker-mode-toggle" /> Speaker mode (echo cancellation)</label>
+    </div>
+    <p class="status-text">Lets you use speakers instead of headphones without the concealer/noise audio feeding back into the mic. Off by default - turn on only if not using headphones.</p>
   </section>
 
   <div class="section-group">
@@ -167,6 +171,10 @@
         <div class="spectrogram-row">
           <span class="spectrogram-label">Source</span>
           <canvas id="spec-mic" class="spectrogram-canvas" width="280" height="90"></canvas>
+        </div>
+        <div class="spectrogram-row speaker-mode-dependent">
+          <span class="spectrogram-label">Source (echo-canceled)</span>
+          <canvas id="spec-mic-aec" class="spectrogram-canvas" width="280" height="90"></canvas>
         </div>
         <div class="spectrogram-row concealer-dependent">
           <span class="spectrogram-label">Concealer</span>

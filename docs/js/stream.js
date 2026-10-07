@@ -11,13 +11,15 @@ export class ConcealerStream {
    * @param {SileroVAD} sourceVad - the real-time "is speech happening now" VAD (distinct from concealer.vad).
    * @param {GranSpeechMask} concealer
    * @param {SileroVAD|TenVAD} noiseVad - dedicated VAD (own model instance, see worker-engine.js's init()) used only to gate SpeechShapedNoise's calibration input behind "Speech-shaped purity" below; constructed with logitThreshold: null so predict() returns the raw speech ratio, not a bool.
+   * @param {EchoCanceller|null} echoCanceller - "Speaker mode" (see echo-canceller.js's own header) - null while off, the exact original/default behavior.
    * @param {boolean} debug - debug.html's debugTelemetry flag; gates [STREAMDIAG] logging below (see worker-engine.js)
    */
-  constructor(streamConfig, sourceVad, concealer, noiseVad, debug = false) {
+  constructor(streamConfig, sourceVad, concealer, noiseVad, echoCanceller, debug = false) {
     this.streamConfig = streamConfig;
     this.sourceVad = sourceVad;
     this.concealer = concealer;
     this.noiseVad = noiseVad;
+    this.echoCanceller = echoCanceller;
     this.debug = debug; // DIAGNOSTIC gate
 
     this.pendingConcMaxSize = concealer.pendingConcMaxSize;
@@ -122,7 +124,7 @@ export class ConcealerStream {
 
   /**
    * x: Float32Array, one audio block (mono) at streamConfig.sr.
-   * Returns { playMix, recMix: Float32Array (mono), voiceName: string, micBlock, concealerBlock, noiseBlock: Float32Array (mono, unmixed per-track signals) }.
+   * Returns { playMix, recMix: Float32Array (mono), voiceName: string, micBlock, micAecBlock (null unless Speaker mode is on), concealerBlock, noiseBlock: Float32Array (mono, unmixed per-track signals) }.
    * The caller (worker-engine.js) is responsible for recording/tiling to
    * channels_out and for anything Stream.py's record_mode handled - this
    * port has no on-disk recording (no filesystem in a browser tab the way
@@ -141,6 +143,20 @@ export class ConcealerStream {
       this.__chunkCount = (this.__chunkCount || 0) + 1;
       if (this.__chunkCount % 40 === 0) console.error(`[STREAMDIAG] processChunk call#${this.__chunkCount}`);
     }
+
+    // Acoustic echo cancellation ("Speaker mode" - see echo-canceller.js's
+    // own header for the algorithm/citation/why). Replaces the raw mic
+    // signal with its own best estimate of "x with our own speaker output
+    // subtracted out" BEFORE anything else below (noise calibration, VAD,
+    // concealer selection) ever sees it. Without this, over real speakers,
+    // the concealer's own synthesized output - picked back up by the mic -
+    // would look just like fresh human speech to everything downstream:
+    // VAD fires on our own echo, the concealer might store it into memory
+    // or trigger MORE output in response to hearing itself - a recursive
+    // content feedback loop, a bigger problem than simple audible howling
+    // alone. null (the default, Speaker mode off) means this is a no-op -
+    // cancelledX === x, the exact original behavior from before this existed.
+    const cancelledX = this.echoCanceller ? await this.echoCanceller.processCapture(x) : x;
 
     // Fed (every chunk, regardless of concealing state) ONLY while Noise is
     // actually enabled - this._noiseGen is null otherwise (see the
@@ -163,10 +179,10 @@ export class ConcealerStream {
     if (this._noiseGen) {
       const purity = this.streamConfig.noise_shaped_purity ?? 0;
       if (this.noiseType === 'speechShaped' && purity > 0 && this.noiseVad) {
-        const speechRatio = await this.noiseVad.predict(x);
-        if (speechRatio > purity) this._noiseGen.feed(x);
+        const speechRatio = await this.noiseVad.predict(cancelledX);
+        if (speechRatio > purity) this._noiseGen.feed(cancelledX);
       } else {
-        this._noiseGen.feed(x);
+        this._noiseGen.feed(cancelledX);
       }
     }
 
@@ -177,7 +193,7 @@ export class ConcealerStream {
     // setConcealerEnabled's own comment): a real disconnect, not just a
     // muted output. lastVoiceActivity (debug viz only) just stays false.
     if (this.concealerEnabled) {
-      const voiceActivity = await this.sourceVad.predict(x); // forecast === x (identity forecaster)
+      const voiceActivity = await this.sourceVad.predict(cancelledX); // forecast === cancelledX (identity forecaster)
       this.lastVoiceActivity = voiceActivity;
       // updateMemory runs every chunk regardless of voice activity - not just
       // while getConcealer's own voice-active branch runs - so that once a
@@ -186,9 +202,9 @@ export class ConcealerStream {
       // only being checked on the next chunk that happens to have voice in it
       // (see granspeechmask.js's pendingSpeechActive/pendingSpeechSamples for
       // why this JS port deliberately diverges from upstream amods here).
-      await this.concealer.updateMemory(x);
+      await this.concealer.updateMemory(cancelledX);
       if (voiceActivity) {
-        const { audio: concealerAudio, voiceName: vn } = await this.concealer.getConcealer(x);
+        const { audio: concealerAudio, voiceName: vn } = await this.concealer.getConcealer(cancelledX);
         voiceName = vn;
         if (concealerAudio) {
           const mult = this.streamConfig.conc_multiplier;
@@ -197,7 +213,7 @@ export class ConcealerStream {
           }
         }
       } else {
-        this.concealer.refresh(x);
+        this.concealer.refresh(cancelledX);
       }
     } else {
       this.lastVoiceActivity = false;
@@ -273,6 +289,12 @@ export class ConcealerStream {
     const { y: recMix, newGain: recGain } = limitPeak(recSum, { limit: 0.95, prevGain: this._recMixGain, sr });
     this._recMixGain = recGain;
 
+    // Registers THIS chunk's final mixed output as "render" data (see
+    // echo-canceller.js's own header) - its echo, once it actually travels
+    // speaker->air->mic, is what a LATER chunk's processCapture call above
+    // will be matched against and subtracted out.
+    if (this.echoCanceller) await this.echoCanceller.analyzeRender(playMix);
+
     const elapsedMs = performance.now() - t0;
     this._callbackMsSum += elapsedMs;
     this._callbackMsMax = Math.max(this._callbackMsMax, elapsedMs);
@@ -286,7 +308,19 @@ export class ConcealerStream {
     // master enabled/disabled state (silent when off) but NOT the debug-
     // only listen toggles - the point is to show what each track is
     // actually producing, not just whatever you currently have audible.
-    return { playMix, recMix, voiceName, micBlock: x, concealerBlock: concBlock, noiseBlock: noiseContributionBlock };
+    // micBlock is deliberately the RAW x (not cancelledX) - a genuine
+    // "before" reference for debug.html's "Source" vs "Source (echo-
+    // canceled)" comparison. micAecBlock is cancelledX only while Speaker
+    // mode is on, null otherwise (nothing to compare against when it's off).
+    return {
+      playMix,
+      recMix,
+      voiceName,
+      micBlock: x,
+      micAecBlock: this.echoCanceller ? cancelledX : null,
+      concealerBlock: concBlock,
+      noiseBlock: noiseContributionBlock,
+    };
   }
 
   /** Pop and reset the average/max/slow-count callback-time stats (mirrors Stream.pop_callback_timing). */

@@ -54,6 +54,7 @@ const els = {
   pingBtn: document.getElementById('ping-btn'),
   feedbackWarning: document.getElementById('feedback-warning'),
   outputSinkWarning: document.getElementById('output-sink-warning'),
+  speakerModeToggle: document.getElementById('speaker-mode-toggle'),
   vadTypeSelect: document.getElementById('vad-type-select'),
   concealingRate: document.getElementById('concealing-rate'),
   concealingRateValue: document.getElementById('concealing-rate-value'),
@@ -93,6 +94,7 @@ const els = {
   vizEnabledToggle: document.getElementById('viz-enabled-toggle'),
   debugEnabledToggle: document.getElementById('debug-enabled-toggle'),
   specMicCanvas: document.getElementById('spec-mic'),
+  specMicAecCanvas: document.getElementById('spec-mic-aec'),
   specConcealerCanvas: document.getElementById('spec-concealer'),
   specNoiseCanvas: document.getElementById('spec-noise'),
   vizRtVad: document.getElementById('viz-rt-vad'),
@@ -110,9 +112,17 @@ const els = {
 // and the worker's own specAnalyzers never even get constructed (see
 // worker-engine.js's init()) - a plain production session pays nothing
 // for this feature either side of the postMessage boundary.
+// specMicAec shows the actual AEC3-processed mic signal (see echo-
+// canceller.js) - genuinely distinct from specMic's raw signal, computed by
+// its own SpectrogramAnalyzer in worker-engine.js and sent as its own
+// 'specFrame' field (msg.micAec), only while Speaker mode is on (see
+// updateSpeakerModeDependentVisibility for the matching row-visibility
+// toggle, and worker-engine.js's createSpecAnalyzers for why the analyzer
+// itself isn't even constructed while Speaker mode is off).
 const specViews = DEBUG_MODE && els.specMicCanvas
   ? {
       mic: new SpectrogramView(els.specMicCanvas),
+      micAec: els.specMicAecCanvas ? new SpectrogramView(els.specMicAecCanvas) : null,
       concealer: new SpectrogramView(els.specConcealerCanvas),
       noise: new SpectrogramView(els.specNoiseCanvas),
     }
@@ -502,6 +512,28 @@ async function preloadModels() {
   }
 }
 
+// ── Speaker mode (acoustic echo cancellation for speaker use) ──────────────
+// Problem: this app is normally used with headphones, so the concealer/
+// noise audio it plays never reaches the mic. Over real speakers, it does -
+// the mic picks the played audio back up, which (same path, same delay
+// every loop) is exactly a Larsen/howling feedback loop, and worse, can
+// recursively feed the concealer its own output as if it were fresh speech.
+//
+// An earlier version of this feature tried to coax the BROWSER's own
+// built-in echo canceller into handling this (the getUserMedia
+// `echoCancellation` constraint), via a local RTCPeerConnection-loopback
+// workaround for Chromium specifically (which otherwise never applies that
+// constraint to Web Audio API output at all). That approach is GONE now,
+// replaced with an explicit, non-browser echo canceller we call directly -
+// see echo-canceller.js's own header for the full citation/explanation and
+// why (the browser's own black-box version gave no way to inspect, measure,
+// or debug what it was doing once it looked like it wasn't working).
+// Actual processing now lives in stream.js's processChunk (worker-side,
+// via the EchoCanceller class) - this file only reads the
+// "speaker-mode-toggle" checkbox (speakerModeToggle) and sends it along at
+// session init (see ensureEngine's cfg below) and in connectSource's mic
+// constraints comment.
+
 // ── Start / Pause / Stop ────────────────────────────────────────────────
 // The debug source (DEBUG_AUDIO_PATH, see connectSource() below): instead of
 // opening the mic, decodes that file into an AudioBuffer and feeds it into
@@ -528,6 +560,7 @@ async function ensureEngine() {
   // runs once per Start press, not on every connectSource source switch.
   if (specViews) {
     specViews.mic.clear();
+    if (specViews.micAec) specViews.micAec.clear();
     specViews.concealer.clear();
     specViews.noise.clear();
   }
@@ -546,6 +579,7 @@ async function ensureEngine() {
   if (specViews) {
     const columnsPerSecond = sr / CHUNK_SIZE_AT_48K;
     specViews.mic.setTimeScale(columnsPerSecond, SPECTROGRAM_TARGET_SECONDS);
+    if (specViews.micAec) specViews.micAec.setTimeScale(columnsPerSecond, SPECTROGRAM_TARGET_SECONDS);
     specViews.concealer.setTimeScale(columnsPerSecond, SPECTROGRAM_TARGET_SECONDS);
     specViews.noise.setTimeScale(columnsPerSecond, SPECTROGRAM_TARGET_SECONDS);
   }
@@ -600,6 +634,7 @@ async function ensureEngine() {
       // Same "every chunk, not gated on paused" reasoning as rtVad above -
       // drainQueue stops producing these on its own once paused.
       specViews.mic.pushColumn(msg.mic);
+      if (specViews.micAec && msg.micAec) specViews.micAec.pushColumn(msg.micAec);
       specViews.concealer.pushColumn(msg.concealer);
       specViews.noise.pushColumn(msg.noise);
     }
@@ -691,6 +726,12 @@ async function ensureEngine() {
       // work entirely), not just a hidden display. Only meaningful when
       // debugTelemetry is true - index.html has no vizEnabledToggle at all.
       vizEnabled: els.vizEnabledToggle ? els.vizEnabledToggle.checked : false,
+      // "Speaker mode" - see this file's own section above ensureEngine for
+      // why, and echo-canceller.js for the actual algorithm. Constructs/
+      // skips the worker's EchoCanceller instance (see worker-engine.js's
+      // init()); real production feature, present on both index.html and
+      // debug.html - not a debugTelemetry-gated concern like vizEnabled above.
+      speakerModeEnabled: Boolean(els.speakerModeToggle && els.speakerModeToggle.checked),
       // Always the safe production default here, regardless of what the
       // debug toggles currently show - this engine is shared by BOTH mic and
       // debug sessions (see connectSource()), and ensureEngine() runs once,
@@ -790,6 +831,10 @@ async function connectSource(newSource) {
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         deviceId: micDeviceId ? { exact: micDeviceId } : undefined,
+        // Always unprocessed (matches VAD/level analysis's own need for a
+        // flat, unmodified signal) - "Speaker mode"'s echo cancellation is
+        // now done ourselves, explicitly, in stream.js's processChunk (see
+        // echo-canceller.js), not via this constraint.
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
@@ -1037,6 +1082,7 @@ function setControlsEnabled(enabled) {
   els.denoiserSelect.disabled = !enabled;
   els.vadTypeSelect.disabled = !enabled; // same reasoning as denoiserSelect - the backend is fixed for a session's lifetime, no live-switching mid-session
   els.noiseVadTypeSelect.disabled = !enabled; // same reasoning - the noise-purity VAD's backend is also fixed for a session's lifetime
+  if (els.speakerModeToggle) els.speakerModeToggle.disabled = !enabled; // same reasoning - the worker's EchoCanceller instance is constructed once at session init() (see worker-engine.js), not live-switchable mid-session
   els.pingBtn.disabled = !enabled;
   // Concealing rate, concealer memory rate, concealing smoothness,
   // concealing overlap, concealing noise, and concealer level stay enabled
@@ -1609,10 +1655,23 @@ function updateDebugDependentVisibility() {
   });
 }
 
+// The "Source (echo-canceled)" spectrogram row (debug.html only, see
+// specViews' own comment on why it shows the same column as "Source" -
+// there's no separate pre-AEC signal to show instead) - visible only
+// while Speaker mode is actually on, so it never implies AEC is active
+// when it isn't.
+function updateSpeakerModeDependentVisibility() {
+  const enabled = Boolean(els.speakerModeToggle && els.speakerModeToggle.checked);
+  document.querySelectorAll('.speaker-mode-dependent').forEach((el) => {
+    el.classList.toggle('is-hidden', !enabled);
+  });
+}
+
 updateConcealerDependentVisibility();
 updateNoiseDependentVisibility();
 if (DEBUG_MODE && els.vizEnabledToggle) updateVizDependentVisibility();
 if (DEBUG_MODE && els.debugEnabledToggle) updateDebugDependentVisibility();
+if (DEBUG_MODE && els.speakerModeToggle) updateSpeakerModeDependentVisibility();
 
 // Master on/off toggles next to the "Concealer"/"Noise" sur-titles -
 // present on both index.html and debug.html, unlike the debug-only
@@ -1626,6 +1685,14 @@ els.noiseEnabledToggle.addEventListener('change', () => {
   updateNoiseDependentVisibility();
   if (worker && running) worker.postMessage({ type: 'setNoiseEnabled', value: els.noiseEnabledToggle.checked });
 });
+
+if (DEBUG_MODE && els.speakerModeToggle) {
+  // Visualization-only - Speaker mode itself is read fresh at session start
+  // (ensureEngine()/connectSource()) and disabled while running (see
+  // setControlsEnabled), so this listener's only job is keeping the
+  // "Source (echo-canceled)" row's visibility in sync with the checkbox.
+  els.speakerModeToggle.addEventListener('change', updateSpeakerModeDependentVisibility);
+}
 
 if (DEBUG_MODE && els.vizEnabledToggle) {
   els.vizEnabledToggle.addEventListener('change', () => {

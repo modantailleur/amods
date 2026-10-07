@@ -25,6 +25,7 @@ import { RemoteDenoiser } from './denoiser-proxy.js';
 import { applyFadeIn } from './audio-utils.js';
 import { installDebugLogRelay } from './debug-log.js';
 import { SpectrogramAnalyzer } from './spectrogram.js';
+import { EchoCanceller } from './echo-canceller.js';
 
 let stream = null;
 let concealer = null;
@@ -46,11 +47,16 @@ let debugTelemetry = false; // set from cfg.debugTelemetry - see docs/debug.html
 // comment for why the two must agree.
 const SPECTROGRAM_DISPLAY_BINS = 90;
 let vizEnabled = false;
-let specAnalyzers = null; // { mic, concealer, noise } once constructed
+let speakerModeEnabled = false; // set from cfg.speakerModeEnabled - see "Speaker mode"/EchoCanceller below; read here only to decide whether createSpecAnalyzers' micAec is worth constructing at all
+let specAnalyzers = null; // { mic, micAec, concealer, noise } once constructed
 
 function createSpecAnalyzers() {
   return {
     mic: new SpectrogramAnalyzer(sr, SPECTROGRAM_DISPLAY_BINS),
+    // Only while Speaker mode is actually on - otherwise stream.js's
+    // processChunk always returns micAecBlock: null (nothing to show), so
+    // there's no point spending a 4th analyzer's FFT work/buffers on it.
+    micAec: speakerModeEnabled ? new SpectrogramAnalyzer(sr, SPECTROGRAM_DISPLAY_BINS) : null,
     concealer: new SpectrogramAnalyzer(sr, SPECTROGRAM_DISPLAY_BINS),
     noise: new SpectrogramAnalyzer(sr, SPECTROGRAM_DISPLAY_BINS),
   };
@@ -63,8 +69,13 @@ async function init(cfg) {
   // main.js's own installDebugLogRelay('main') call never sees anything
   // logged in here - see debug-log.js for why both realms need their own.
   if (debugTelemetry) installDebugLogRelay('worker');
+  speakerModeEnabled = Boolean(cfg.speakerModeEnabled);
   vizEnabled = debugTelemetry && Boolean(cfg.vizEnabled);
   specAnalyzers = vizEnabled ? createSpecAnalyzers() : null;
+  // "Speaker mode" - see echo-canceller.js's own header for the algorithm/
+  // citation/why. null while off, the exact original/default behavior (see
+  // stream.js's processChunk - it no-ops entirely when this is null).
+  const echoCanceller = speakerModeEnabled ? new EchoCanceller(cfg.sr) : null;
 
   // Three SEPARATE VAD instances, NEVER sharing one underlying model
   // session/module - sourceVad and concealerVad are called from genuinely
@@ -162,6 +173,7 @@ async function init(cfg) {
     concealingThreshold: cfg.concealingThreshold,
     concealerMemoryThreshold: cfg.concealerMemoryThreshold,
     denoiserEnabled: Boolean(cfg.denoiserEnabled),
+    speakerModeEnabled,
     memoryMaxlen: concealerConfig.memory_maxlen,
     minMemoryToConceal: concealerConfig.min_memory_to_conceal,
   }));
@@ -209,7 +221,7 @@ async function init(cfg) {
     listen_concealer: cfg.listenConcealer ?? true,
     listen_noise: cfg.listenNoise ?? true,
   };
-  stream = new ConcealerStream(streamConfig, sourceVad, concealer, noiseVad, debugTelemetry);
+  stream = new ConcealerStream(streamConfig, sourceVad, concealer, noiseVad, echoCanceller, debugTelemetry);
 
   postMessage({ type: 'ready' });
   startStatusLoop();
@@ -353,7 +365,7 @@ async function drainQueue() {
   if (!item) return;
   processing = true;
   try {
-    let { playMix, micBlock, concealerBlock, noiseBlock } = await stream.processChunk(item.chunk);
+    let { playMix, micBlock, micAecBlock, concealerBlock, noiseBlock } = await stream.processChunk(item.chunk);
     // Debug-visualization only - sent every chunk (~50ms), unconditionally
     // (not gated on staleMs below - that only decides whether THIS chunk's
     // audio is still worth playing, not whether the dot's state is still
@@ -372,7 +384,17 @@ async function drainQueue() {
       const mic = specAnalyzers.mic.computeColumn();
       const concealerCol = specAnalyzers.concealer.computeColumn();
       const noise = specAnalyzers.noise.computeColumn();
-      postMessage({ type: 'specFrame', mic, concealer: concealerCol, noise }, [mic.buffer, concealerCol.buffer, noise.buffer]);
+      const transfer = [mic.buffer, concealerCol.buffer, noise.buffer];
+      const msg = { type: 'specFrame', mic, concealer: concealerCol, noise };
+      // micAec: genuinely distinct data from mic above (the actual AEC3-
+      // processed signal, not a duplicate) - only exists while Speaker mode
+      // is on (see createSpecAnalyzers' own comment).
+      if (specAnalyzers.micAec && micAecBlock) {
+        specAnalyzers.micAec.push(micAecBlock);
+        msg.micAec = specAnalyzers.micAec.computeColumn();
+        transfer.push(msg.micAec.buffer);
+      }
+      postMessage(msg, transfer);
     }
     const staleMs = performance.now() - item.arrivedAt;
     if (staleMs <= MAX_STALE_MS) {
