@@ -16,6 +16,7 @@ import { applyFade } from './audio-utils.js';
 import { featureExtractor } from './mel.js';
 import { deEss } from './deesser.js';
 import { applyConcealingNoise } from './concealer-noise.js';
+import { applyKWeighting } from './k-weighting.js';
 
 const GATE_WINDOW_MS = 20;
 const GATE_RELATIVE_THRESHOLD_DB = -20;
@@ -34,6 +35,15 @@ const GATE_RELATIVE_THRESHOLD_DB = -20;
  * ever gets. Gating measures "how loud is this clip where it's actually
  * making sound" instead, which is what the normalization should have been
  * matching against all along.
+ *
+ * x is expected to ALREADY be K-weighted (see k-weighting.js and this
+ * module's own callers below) - this function itself only does the
+ * windowing/gating math, agnostic to whether what it's handed is raw or
+ * pre-filtered. Matching the real standards' own order of operations
+ * (filter first, gate second) this way is also what lets a caller filter a
+ * longer buffer ONCE, continuously, before slicing it into gated
+ * sub-windows - see liveGatedMeanSquare's own comment for why that
+ * ordering matters.
  */
 function gatedMeanSquare(x, sr) {
   const winSize = Math.max(1, Math.round((sr * GATE_WINDOW_MS) / 1000));
@@ -95,14 +105,22 @@ function gatedMeanSquare(x, sr) {
  * gatedMeanSquare's own return value. If x doesn't divide evenly into
  * chunkSize, the leftover is dropped from the START (the oldest audio),
  * keeping only the most recent whole chunks.
+ *
+ * K-weighted (see k-weighting.js) ONCE here, across the whole of x, BEFORE
+ * any chunking happens below - not per-chunk inside the loop. applyKWeighting
+ * is a stateful IIR filter (each output sample depends on the ones before
+ * it), so filtering each chunk independently would re-trigger its startup
+ * transient at every chunk boundary instead of just once at x's true start,
+ * subtly distorting every chunk's own gated measurement except the first.
  */
 function liveGatedMeanSquare(x, sr, chunkSize) {
-  if (x.length < chunkSize) return gatedMeanSquare(x, sr);
-  const nChunks = Math.floor(x.length / chunkSize);
-  const start = x.length - nChunks * chunkSize;
+  const weighted = applyKWeighting(x, sr);
+  if (weighted.length < chunkSize) return gatedMeanSquare(weighted, sr);
+  const nChunks = Math.floor(weighted.length / chunkSize);
+  const start = weighted.length - nChunks * chunkSize;
   let rmsSum = 0;
   for (let c = 0; c < nChunks; c++) {
-    const chunk = x.slice(start + c * chunkSize, start + (c + 1) * chunkSize);
+    const chunk = weighted.slice(start + c * chunkSize, start + (c + 1) * chunkSize);
     rmsSum += Math.sqrt(gatedMeanSquare(chunk, sr));
   }
   const avgRms = rmsSum / nChunks;
@@ -630,14 +648,15 @@ export class GranSpeechMask {
     const chosen = this.memory[bestIdx];
     chosen.cooldown = this.maxCountdownReuse;
 
-    // Normalize energy to match the live buffer - gated (see
-    // gatedMeanSquare's own comment for why), not a flat whole-signal
-    // average, on both sides for consistency. The live side is additionally
-    // chunked to the clip's own size first (see liveGatedMeanSquare's own
-    // comment) so both sides of the comparison are measured at the same
-    // time scale, not "a single clip" vs "the whole 2s history at once".
+    // Normalize energy to match the live buffer - K-weighted and gated
+    // (see k-weighting.js and gatedMeanSquare's own comments for why), not
+    // a flat whole-signal average, on both sides for consistency. The live
+    // side is additionally chunked to the clip's own size first (see
+    // liveGatedMeanSquare's own comment) so both sides of the comparison
+    // are measured at the same time scale, not "a single clip" vs "the
+    // whole 2s history at once".
     const liveMeanSq = liveGatedMeanSquare(pv, this.sr, chosen.clip.length);
-    const clipMeanSq = gatedMeanSquare(chosen.clip, this.sr);
+    const clipMeanSq = gatedMeanSquare(applyKWeighting(chosen.clip, this.sr), this.sr);
     const energyScale = Math.sqrt(liveMeanSq) / Math.sqrt(clipMeanSq);
     const concealer = new Float32Array(chosen.clip.length);
     for (let i = 0; i < concealer.length; i++) concealer[i] = chosen.clip[i] * energyScale;
