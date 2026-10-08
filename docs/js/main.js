@@ -79,6 +79,10 @@ const els = {
   noiseVadTypeSelect: document.getElementById('noise-vad-type-select'),
   noiseLevel: document.getElementById('noise-level'),
   noiseLevelValue: document.getElementById('noise-level-value'),
+  noiseLevelSensitivity: document.getElementById('noise-level-sensitivity'),
+  noiseLevelSensitivityValue: document.getElementById('noise-level-sensitivity-value'),
+  noiseLevelPurity: document.getElementById('noise-level-purity'),
+  noiseLevelPurityValue: document.getElementById('noise-level-purity-value'),
   concealingNoiseSensitivity: document.getElementById('concealing-noise-sensitivity'),
   concealingNoiseSensitivityValue: document.getElementById('concealing-noise-sensitivity-value'),
   concealingNoisePurity: document.getElementById('concealing-noise-purity'),
@@ -192,13 +196,28 @@ function smoothnessToFadeDuration(rateStr) {
   return 0.05 + parseFloat(rateStr) * 0.075;
 }
 
-// "Sensitivity" (the SpeechShapedNoise background bed's EMA time constant
-// - see speech-shaped-noise.js's SpeechShapedNoise.setSensitivitySeconds)
-// is a 0..1 slider like the others, higher = more sensitive/reactive -
-// maps onto 10s (slider 0, slowest/least reactive) down to 0.2s (slider
-// 1, fastest/most reactive), inverted from the underlying seconds value.
+// "Speech-shaped sensitivity" (the SpeechShapedNoise background bed's own
+// EMA time constant - see speech-shaped-noise.js's
+// SpeechShapedNoise.setSensitivitySeconds; only affects the speech-shaped
+// color specifically, unused by white/pink - NOT the same thing as the
+// generic "Sensitivity" slider below) is a 0..1 slider like the others,
+// higher = more sensitive/reactive - maps onto 10s (slider 0, slowest/
+// least reactive) down to 0.2s (slider 1, fastest/most reactive), inverted
+// from the underlying seconds value.
 function sensitivityToSeconds(rateStr) {
   return 10 - parseFloat(rateStr) * 9.8;
+}
+
+// "Sensitivity" - generic, common to every noise color (unlike "Speech-
+// shaped sensitivity" above) - the EMA time constant (see
+// level-tracker.js's own header for the full mechanism) controlling how
+// reactively the Noise bed's overall LEVEL follows the live source
+// signal's loudness over time. Same 0..1 slider convention, higher = more
+// reactive - maps onto 60s (slider 0, slowest) down to 1s (slider 1,
+// fastest), inverted from the underlying seconds value, same direction as
+// sensitivityToSeconds above.
+function noiseLevelSensitivityToSeconds(rateStr) {
+  return 60 - parseFloat(rateStr) * 59;
 }
 
 // "Noise level" is a dB fader exactly like "Concealer level" (see
@@ -729,6 +748,16 @@ async function ensureEngine() {
       // reasoning as sourceVad/concealerVad (see worker-engine.js's init()).
       noiseVadType: els.noiseVadTypeSelect.value,
       concealingNoiseLevel: dbToMultiplier(els.noiseLevel.value),
+      // Generic "Sensitivity" (every noise color, see level-tracker.js) -
+      // separate from concealingNoiseSensitivity below, which is the
+      // speech-shaped-only spectral one.
+      noiseLevelSensitivitySeconds: noiseLevelSensitivityToSeconds(els.noiseLevelSensitivity.value),
+      // Generic "Purity" (every noise color, see level-tracker.js and
+      // stream.js's processChunk) - 0 = level-tracking VAD gating off
+      // entirely (the source level average updates unconditionally, the
+      // original/default behavior); separate from "Speech-shaped purity"
+      // below, which only gates the speechShaped color's calibration input.
+      noiseLevelPurity: purityToThreshold(els.noiseLevelPurity.value),
       concealingNoiseSensitivity: sensitivityToSeconds(els.concealingNoiseSensitivity.value),
       // "Speech-shaped purity" (0-0.9, 0 = VAD gating off entirely - feed
       // the noise generator unconditionally, the original/default
@@ -1624,6 +1653,18 @@ els.noiseLevel.addEventListener('input', () => {
   if (worker && running) worker.postMessage({ type: 'setConcealingNoiseLevel', value });
 });
 
+els.noiseLevelSensitivity.addEventListener('input', () => {
+  const value = noiseLevelSensitivityToSeconds(els.noiseLevelSensitivity.value);
+  els.noiseLevelSensitivityValue.textContent = els.noiseLevelSensitivity.value;
+  if (worker && running) worker.postMessage({ type: 'setNoiseLevelSensitivity', value });
+});
+
+els.noiseLevelPurity.addEventListener('input', () => {
+  const value = purityToThreshold(els.noiseLevelPurity.value);
+  els.noiseLevelPurityValue.textContent = els.noiseLevelPurity.value;
+  if (worker && running) worker.postMessage({ type: 'setNoiseLevelPurity', value });
+});
+
 els.concealingNoiseSensitivity.addEventListener('input', () => {
   const value = sensitivityToSeconds(els.concealingNoiseSensitivity.value);
   els.concealingNoiseSensitivityValue.textContent = els.concealingNoiseSensitivity.value;
@@ -1636,10 +1677,13 @@ els.concealingNoisePurity.addEventListener('input', () => {
   if (worker && running) worker.postMessage({ type: 'setNoiseShapedPurity', value });
 });
 
-// VAD/Sensitivity/Speech-shaped purity only apply to the speechShaped
-// color - hidden (visibility, not display - see style.css's own comment)
-// whenever white/pink is selected, so the panel's height never changes
-// and nothing below it shifts when switching types.
+// Speech-shaped sensitivity/purity only apply to the speechShaped color -
+// hidden (visibility, not display - see style.css's own comment) whenever
+// white/pink is selected, so the panel's height never changes and nothing
+// below it shifts when switching types. "VAD" (noiseVadType) is NOT in
+// this group despite configuring the same noiseVad instance that backs
+// "Speech-shaped purity" above - it also backs the generic "Purity"
+// slider now, which applies to every color, so it stays visible always.
 function updateNoiseTypeDependentVisibility() {
   const isSpeechShaped = els.noiseTypeSelect.value === 'speechShaped';
   document.querySelectorAll('.noise-type-dependent').forEach((row) => {

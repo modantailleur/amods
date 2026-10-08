@@ -196,15 +196,30 @@ async function init(cfg) {
     noise_enabled: cfg.noiseEnabled ?? false,
     // "Noise controls" panel's background bed - level (the "Noise level"
     // dB fader, see main.js's dbToMultiplier), the EMA time constant in
-    // seconds that the "Sensitivity" slider sets for the speech-shaped
-    // color specifically (how far back its spectral envelope remembers -
-    // NOT a buffer size, and unused by white/pink), and which of the
-    // three colors (see noise-generators.js and speech-shaped-noise.js)
+    // seconds that the "Speech-shaped sensitivity" slider sets for the
+    // speech-shaped color specifically (how far back its spectral envelope
+    // remembers - NOT a buffer size, and unused by white/pink), and which
+    // of the three colors (see noise-generators.js and speech-shaped-noise.js)
     // is active - see ConcealerStream's own _noiseGen/noiseType. All
     // three live-tunable via 'setConcealingNoiseLevel'/
     // 'setConcealingNoiseSensitivity'/'setConcealingNoiseType' below.
     concealing_noise_level: cfg.concealingNoiseLevel ?? 0,
     concealing_noise_sensitivity: cfg.concealingNoiseSensitivity ?? 2,
+    // "Sensitivity" (generic, common to every noise color, unlike
+    // concealing_noise_sensitivity above) - the EMA time constant (seconds,
+    // 1-60) the Noise bed's level-tracking (see level-tracker.js) uses to
+    // decide how reactively its overall level follows the live source
+    // signal's loudness. Live-tunable via 'setNoiseLevelSensitivity' below.
+    noise_level_sensitivity_seconds: cfg.noiseLevelSensitivitySeconds ?? 30,
+    // "Purity" slider (0-0.9, generic - unlike noise_shaped_purity below,
+    // applies to every noise color) - 0 means the level-tracking gate in
+    // stream.js's processChunk is off entirely (this._sourceLevelTracker
+    // updates on every chunk, same as before this existed); above 0, only
+    // chunks whose noiseVad speech ratio exceeds this value update it, so
+    // ambient room/mic noise during real silence no longer keeps the
+    // tracked source level - and so the noise bed's own level - from
+    // decaying toward zero. Live-tunable via 'setNoiseLevelPurity' below.
+    noise_level_purity: cfg.noiseLevelPurity ?? 0,
     noise_type: cfg.noiseType ?? 'speechShaped',
     // "Speech-shaped purity" slider (0-0.9) - 0 means the noiseVad gate in
     // stream.js's processChunk is off entirely (feed the speechShaped
@@ -557,18 +572,29 @@ self.onmessage = (event) => {
       if (stream) stream.streamConfig.concealing_noise_level = msg.value;
       break;
     case 'setConcealingNoiseSensitivity':
-      // The "Sensitivity" slider - the EMA time constant (seconds, 0.2-10,
-      // clamped inside SpeechShapedNoise.setSensitivitySeconds) that
-      // controls how far back the noise's spectral envelope remembers, NOT
-      // a buffer size (see speech-shaped-noise.js's header for why) - takes
-      // effect immediately, with no glitch, since it only changes a scalar
-      // smoothing factor rather than resizing/resetting anything. Only
-      // the speech-shaped generator has this - unused by white/pink.
+      // The "Speech-shaped sensitivity" slider - the EMA time constant
+      // (seconds, 0.2-10, clamped inside SpeechShapedNoise.setSensitivitySeconds)
+      // that controls how far back the noise's spectral envelope remembers,
+      // NOT a buffer size (see speech-shaped-noise.js's header for why) -
+      // takes effect immediately, with no glitch, since it only changes a
+      // scalar smoothing factor rather than resizing/resetting anything.
+      // Only the speech-shaped generator has this - unused by white/pink.
       // Routed through ConcealerStream.setNoiseSensitivity (not applied
       // directly here) since the generator instance may not exist right
       // now (Noise off, or a different color active) - that method
       // remembers the value regardless and applies it if/when relevant.
       if (stream) stream.setNoiseSensitivity(msg.value);
+      break;
+    case 'setNoiseLevelSensitivity':
+      // The generic "Sensitivity" slider (common to every noise color,
+      // unlike "Speech-shaped sensitivity" above) - the EMA time constant
+      // (seconds, 1-60) level-tracker.js's two LevelTracker instances use
+      // to decide how reactively the Noise bed's overall level follows the
+      // live source signal's loudness (see stream.js's processChunk).
+      // Routed through ConcealerStream.setNoiseLevelSensitivity for the
+      // same reason as setNoiseSensitivity above - the trackers may not
+      // exist right now (Noise off).
+      if (stream) stream.setNoiseLevelSensitivity(msg.value);
       break;
     case 'setNoiseShapedPurity':
       // "Speech-shaped purity" slider - read fresh every chunk from
@@ -577,6 +603,13 @@ self.onmessage = (event) => {
       // object needs to be told (unlike setConcealingNoiseSensitivity,
       // which also has to push into the live generator instance).
       if (stream) stream.streamConfig.noise_shaped_purity = msg.value;
+      break;
+    case 'setNoiseLevelPurity':
+      // The generic "Purity" slider (common to every noise color, unlike
+      // "Speech-shaped purity" above) - same direct-field-update reasoning
+      // as setNoiseShapedPurity: read fresh every chunk from streamConfig
+      // inside stream.js's processChunk, no secondary object to update.
+      if (stream) stream.streamConfig.noise_level_purity = msg.value;
       break;
     case 'setConcealingNoiseType':
       // "Noise controls" panel's color dropdown (speechShaped/white/pink

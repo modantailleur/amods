@@ -45,7 +45,7 @@ const GATE_RELATIVE_THRESHOLD_DB = -20;
  * sub-windows - see liveGatedMeanSquare's own comment for why that
  * ordering matters.
  */
-function gatedMeanSquare(x, sr) {
+export function gatedMeanSquare(x, sr) {
   const winSize = Math.max(1, Math.round((sr * GATE_WINDOW_MS) / 1000));
   if (x.length <= winSize) {
     let sum = 0;

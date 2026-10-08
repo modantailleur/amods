@@ -67,22 +67,17 @@ function getFilters(sr) {
 }
 
 /**
- * Direct-form-I biquad, one stage. Zero initial state (x[-1]=x[-2]=y[-1]=
- * y[-2]=0) - correct for filtering a standalone buffer with no accessible
- * prior history (a stored memory clip), and still correct for a live
- * buffer slice as long as the WHOLE slice is filtered in one call before
- * any further chunking happens (see applyKWeighting's own note) - the
- * startup transient only ever happens once, at the true start of
- * whatever's being measured, not re-introduced at internal chunk
- * boundaries.
+ * Direct-form-I biquad, one stage, using/updating the given state object
+ * (x1,x2,y1,y2) in place - lets a caller filter a long signal
+ * incrementally, chunk by chunk, with the filter's own history correctly
+ * carried across calls (see StreamingKWeighting below), rather than
+ * restarting - and re-triggering the startup transient - every call the
+ * way a fresh {x1:0,x2:0,y1:0,y2:0} state would.
  */
-function applyBiquad(x, coeffs) {
+function applyBiquadStateful(x, coeffs, state) {
   const { b0, b1, b2, a1, a2 } = coeffs;
   const y = new Float64Array(x.length);
-  let x1 = 0;
-  let x2 = 0;
-  let y1 = 0;
-  let y2 = 0;
+  let { x1, x2, y1, y2 } = state;
   for (let i = 0; i < x.length; i++) {
     const xi = x[i];
     const yi = b0 * xi + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
@@ -92,18 +87,53 @@ function applyBiquad(x, coeffs) {
     y2 = y1;
     y1 = yi;
   }
+  state.x1 = x1;
+  state.x2 = x2;
+  state.y1 = y1;
+  state.y2 = y2;
   return y;
 }
 
 /**
  * K-weights x (see this module's own header), returning a new Float64Array
- * the same length as x. Apply this ONCE to the longest continuous buffer
- * available BEFORE any further chunking/windowing a caller does (see
- * granspeechmask.js's liveGatedMeanSquare) - filtering each small chunk
- * independently would re-trigger the filter's own startup transient at
- * every chunk boundary instead of just once at the true start.
+ * the same length as x. Fresh (zero) filter state every call - correct for
+ * filtering a standalone buffer with no accessible prior history (a
+ * stored memory clip), and still correct for a live buffer slice as long
+ * as the WHOLE slice is filtered in one call before any further chunking
+ * happens (see granspeechmask.js's liveGatedMeanSquare) - the startup
+ * transient only ever happens once, at the true start of whatever's being
+ * measured, not re-introduced at internal chunk boundaries. For a
+ * long-running real-time stream fed in many successive small chunks
+ * instead (continuous mic input, not a single already-complete buffer),
+ * use StreamingKWeighting below, which carries filter state correctly
+ * across calls instead of restarting it fresh (and re-triggering the
+ * transient) every time.
  */
 export function applyKWeighting(x, sr) {
   const [stage1, stage2] = getFilters(sr);
-  return applyBiquad(applyBiquad(x, stage1), stage2);
+  return applyBiquadStateful(applyBiquadStateful(x, stage1, { x1: 0, x2: 0, y1: 0, y2: 0 }), stage2, { x1: 0, x2: 0, y1: 0, y2: 0 });
+}
+
+/**
+ * Continuous, stateful K-weighting for a long-running real-time stream fed
+ * in small successive chunks (e.g. this app's 50ms chunks) - see
+ * level-tracker.js for what this is actually used for. Unlike
+ * applyKWeighting (fresh/zero filter state every call), this instance
+ * carries the two biquad stages' own history correctly across calls, so
+ * the startup transient only ever happens once, right when the instance
+ * is first created, not re-triggered on every chunk.
+ */
+export class StreamingKWeighting {
+  constructor(sr) {
+    const [stage1, stage2] = getFilters(sr);
+    this.stage1 = stage1;
+    this.stage2 = stage2;
+    this.state1 = { x1: 0, x2: 0, y1: 0, y2: 0 };
+    this.state2 = { x1: 0, x2: 0, y1: 0, y2: 0 };
+  }
+
+  /** x: Float32Array/Float64Array chunk. Returns a new Float64Array, same length. */
+  process(x) {
+    return applyBiquadStateful(applyBiquadStateful(x, this.stage1, this.state1), this.stage2, this.state2);
+  }
 }

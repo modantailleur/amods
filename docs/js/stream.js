@@ -4,6 +4,7 @@
 import { limitPeak } from './audio-utils.js';
 import { SpeechShapedNoise } from './speech-shaped-noise.js';
 import { WhiteNoiseGenerator, PinkNoiseGenerator } from './noise-generators.js';
+import { LevelTracker } from './level-tracker.js';
 
 // "Soft start" for the Concealer specifically while Speaker mode's
 // EchoCanceller is still converging (see echo-canceller.js's own header -
@@ -51,7 +52,7 @@ const CONCEALER_RAMP_START_FRACTION = 0.1; // only 1 in 10 opportunities let thr
 
 export class ConcealerStream {
   /**
-   * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_type, noise_shaped_purity }
+   * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_level_sensitivity_seconds, noise_level_purity, noise_type, noise_shaped_purity }
    * @param {SileroVAD} sourceVad - the real-time "is speech happening now" VAD (distinct from concealer.vad).
    * @param {GranSpeechMask} concealer
    * @param {SileroVAD|TenVAD} noiseVad - dedicated VAD (own model instance, see worker-engine.js's init()) used only to gate SpeechShapedNoise's calibration input behind "Speech-shaped purity" below; constructed with logitThreshold: null so predict() returns the raw speech ratio, not a bool.
@@ -91,6 +92,22 @@ export class ConcealerStream {
     this.noiseType = streamConfig.noise_type ?? 'speechShaped';
     this.noiseEnabled = streamConfig.noise_enabled ?? false;
     this._noiseGen = this.noiseEnabled ? this._createNoiseGen(this.noiseType) : null;
+
+    // "Sensitivity" (generic, common to every noise color - unlike
+    // "Speech-shaped sensitivity"/concealing_noise_sensitivity above, which
+    // only affects SpeechShapedNoise's own spectral envelope) - how
+    // reactively the Noise bed's overall LEVEL follows the live source
+    // signal's loudness over time. See level-tracker.js's own header for
+    // the full mechanism; tied to the SAME lifecycle as _noiseGen itself
+    // (lazy, real disconnection while Noise is off) since tracking a
+    // level nobody's listening to would be pure waste - see
+    // setNoiseEnabled below.
+    this._sourceLevelTracker = this.noiseEnabled ? new LevelTracker(this.streamConfig.sr) : null;
+    this._noiseLevelTracker = this.noiseEnabled ? new LevelTracker(this.streamConfig.sr) : null;
+    if (this._sourceLevelTracker) {
+      this._sourceLevelTracker.setTimeConstant(streamConfig.noise_level_sensitivity_seconds ?? 30);
+      this._noiseLevelTracker.setTimeConstant(streamConfig.noise_level_sensitivity_seconds ?? 30);
+    }
 
     // Timing stats, mirrors Stream._record_callback_timing/pop_callback_timing.
     this._callbackMsSum = 0;
@@ -145,16 +162,32 @@ export class ConcealerStream {
     if (this.noiseEnabled) this._noiseGen = this._createNoiseGen(type);
   }
 
-  /** Master on/off for the whole Noise section - see this constructor's own comment for why this actually constructs/drops the generator instance rather than just gating its output. */
+  /** Master on/off for the whole Noise section - see this constructor's own comment for why this actually constructs/drops the generator instance (and the level trackers alongside it) rather than just gating its output. */
   setNoiseEnabled(enabled) {
     this.noiseEnabled = enabled;
     this._noiseGen = enabled ? this._createNoiseGen(this.noiseType) : null;
+    this._sourceLevelTracker = enabled ? new LevelTracker(this.streamConfig.sr) : null;
+    this._noiseLevelTracker = enabled ? new LevelTracker(this.streamConfig.sr) : null;
+    if (enabled) {
+      const seconds = this.streamConfig.noise_level_sensitivity_seconds ?? 30;
+      this._sourceLevelTracker.setTimeConstant(seconds);
+      this._noiseLevelTracker.setTimeConstant(seconds);
+    }
   }
 
   /** Live-updates the speech-shaped color's own EMA time constant - no-ops (just remembers the value for next activation) unless that color is both selected and currently instantiated. */
   setNoiseSensitivity(seconds) {
     this.streamConfig.concealing_noise_sensitivity = seconds;
     if (this.noiseType === 'speechShaped' && this._noiseGen) this._noiseGen.setSensitivitySeconds(seconds);
+  }
+
+  /** Live-updates the generic level-tracking "Sensitivity" slider's EMA time constant - applies to both trackers, regardless of noise color (unlike setNoiseSensitivity above). No-ops (just remembers the value) while Noise is disabled, same reasoning as setNoiseSensitivity. */
+  setNoiseLevelSensitivity(seconds) {
+    this.streamConfig.noise_level_sensitivity_seconds = seconds;
+    if (this._sourceLevelTracker) {
+      this._sourceLevelTracker.setTimeConstant(seconds);
+      this._noiseLevelTracker.setTimeConstant(seconds);
+    }
   }
 
   /**
@@ -287,11 +320,21 @@ export class ConcealerStream {
     // unconditionally, the original behavior from before this existed.
     // White/pink ignore feed()'s content outright, so the gate is a no-op
     // for them regardless of this setting.
+    //
+    // "Purity" (0-0.9, generic - see noise_level_purity below) shares this
+    // same noiseVad call when it needs one too, so a chunk that both gates
+    // care about only costs one inference, not two.
+    const noiseShapedPurity = this.streamConfig.noise_shaped_purity ?? 0;
+    const noiseLevelPurity = this.streamConfig.noise_level_purity ?? 0;
+    const needsSpeechShapedGate = Boolean(this._noiseGen) && this.noiseType === 'speechShaped' && noiseShapedPurity > 0;
+    const needsLevelGate = Boolean(this._sourceLevelTracker) && noiseLevelPurity > 0;
+    let noiseVadSpeechRatio = null;
+    if ((needsSpeechShapedGate || needsLevelGate) && this.noiseVad) {
+      noiseVadSpeechRatio = await this.noiseVad.predict(cancelledX);
+    }
     if (this._noiseGen) {
-      const purity = this.streamConfig.noise_shaped_purity ?? 0;
-      if (this.noiseType === 'speechShaped' && purity > 0 && this.noiseVad) {
-        const speechRatio = await this.noiseVad.predict(cancelledX);
-        if (speechRatio > purity) this._noiseGen.feed(cancelledX);
+      if (needsSpeechShapedGate) {
+        if (noiseVadSpeechRatio > noiseShapedPurity) this._noiseGen.feed(cancelledX);
       } else {
         this._noiseGen.feed(cancelledX);
       }
@@ -380,6 +423,45 @@ export class ConcealerStream {
     const noiseBlock = this._noiseGen ? this._noiseGen.nextBlock(frames) : null;
     const noiseGain = this.streamConfig.concealing_noise_level ?? 0;
 
+    // "Sensitivity" (see level-tracker.js's own header) - scales noiseGain
+    // dynamically so the noise bed's overall level follows the live source
+    // signal's loudness over time, multiplying ON TOP of the manual "Noise
+    // level" fader above rather than replacing it (that fader still sets
+    // the baseline/target level; this tracks around it), using cancelledX
+    // (the same post-AEC signal the rest of the pipeline already treats as
+    // "the real source" - see this method's own param comment) and the
+    // noise generator's own raw (pre-fader) output. The small epsilon
+    // avoids a divide-by-zero/huge-spike ratio before the noise generator
+    // has produced any real level yet (right at startup, both EMAs begin
+    // at 0).
+    //
+    // this._noiseLevelTracker is always fed plainly (it's just establishing
+    // the noise generator's own baseline output level, nothing to do with
+    // voice activity). this._sourceLevelTracker is fed plainly too UNLESS
+    // "Purity" (0-0.9, noiseVadSpeechRatio/noiseLevelPurity above) is
+    // raised above 0: gatedMeanSquare's own gate is only relative to
+    // whatever's loudest WITHIN each short window it's handed (see its own
+    // comment in granspeechmask.js), so room/mic ambient noise alone - with
+    // no absolute silence concept - keeps sourceRms from ever really
+    // approaching the true floor and the noise bed never gets pulled down
+    // with it. Raising "Purity" fixes that via updateGated (see level-
+    // tracker.js's own comment there): a chunk that would pull the level
+    // DOWN is always let through (so it still decays on real silence), one
+    // that would push it UP needs noiseVad's speechRatio above the live
+    // threshold first (so ambient noise/false triggers can't inflate it).
+    // 0 (the default) keeps the original always-on update(), no VAD call.
+    let noiseLevelScale = 1;
+    if (this._sourceLevelTracker) {
+      if (noiseLevelPurity > 0) {
+        const speechDetected = noiseVadSpeechRatio !== null && noiseVadSpeechRatio > noiseLevelPurity;
+        this._sourceLevelTracker.updateGated(cancelledX, speechDetected);
+      } else {
+        this._sourceLevelTracker.update(cancelledX);
+      }
+      this._noiseLevelTracker.update(noiseBlock);
+      noiseLevelScale = this._sourceLevelTracker.getRms() / (this._noiseLevelTracker.getRms() + 1e-9);
+    }
+
     const playSum = new Float32Array(frames);
     const recSum = new Float32Array(frames);
     // Gain-applied noise contribution, per sample - built as its own array
@@ -394,7 +476,7 @@ export class ConcealerStream {
       // gate is a defensive no-op rather than load-bearing, but keeps the
       // intent explicit here too.
       const concContribution = this.concealerEnabled ? concBlock[i] : 0;
-      const noiseContribution = noiseBlock ? noiseBlock[i] * noiseGain : 0;
+      const noiseContribution = noiseBlock ? noiseBlock[i] * noiseGain * noiseLevelScale : 0;
       noiseContributionBlock[i] = noiseContribution;
       playSum[i] = (listenOriginal ? playMic[i] : 0) + (listenConcealer ? concContribution : 0) + (listenNoise ? noiseContribution : 0);
       recSum[i] = recMic[i] + concContribution + noiseContribution;
