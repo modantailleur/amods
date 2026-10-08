@@ -108,6 +108,13 @@
           </select>
         </div>
         <div class="row">
+          <label for="noise-vad-type-select">VAD</label>
+          <select id="noise-vad-type-select">
+            <option value="ten" selected>TEN VAD</option>
+            <option value="silero">Silero</option>
+          </select>
+        </div>
+        <div class="row">
           <label for="noise-level-sensitivity">Sensitivity</label>
           <input type="range" id="noise-level-sensitivity" min="0" max="1" step="0.1" value="0.5" />
           <span id="noise-level-sensitivity-value" class="value">0.5</span>
@@ -116,13 +123,6 @@
           <label for="noise-level-purity">Purity</label>
           <input type="range" id="noise-level-purity" min="0" max="0.9" step="0.1" value="0" />
           <span id="noise-level-purity-value" class="value">0</span>
-        </div>
-        <div class="row">
-          <label for="noise-vad-type-select">VAD</label>
-          <select id="noise-vad-type-select">
-            <option value="ten" selected>TEN VAD</option>
-            <option value="silero">Silero</option>
-          </select>
         </div>
         <div class="row noise-type-dependent">
           <label for="concealing-noise-sensitivity">Speech-shaped sensitivity</label>
