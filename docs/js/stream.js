@@ -50,6 +50,18 @@ const CONCEALER_RAMP_ENABLED = false;
 const CONCEALER_RAMP_SECONDS = 15;
 const CONCEALER_RAMP_START_FRACTION = 0.1; // only 1 in 10 opportunities let through at the very start
 
+// One-sided power-law expansion applied to noiseLevelScale (see its own
+// comment below) - a textbook dynamics "expander": raising a ratio to a
+// power widens its dB-domain distance from 1.0 by that same factor. Left
+// at 1 (ratio ** 1 = ratio, a no-op) above 1.0 so a louder-than-noise
+// source isn't touched at all, but above 1 for a quieter-than-noise one
+// so the quiet/silent end gets pushed down much further than the plain
+// ratio alone would - directly widens the gap between "loud" and "quiet"
+// noise-bed loudness without changing what "loud" sounds like. Purely a
+// tuning dial - raise it for a steeper drop-off during quiet, lower
+// (toward 1) to soften it back toward the plain ratio.
+const NOISE_LEVEL_EXPANSION_EXPONENT = 3;
+
 export class ConcealerStream {
   /**
    * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_level_sensitivity_seconds, noise_level_purity, noise_type, noise_shaped_purity }
@@ -459,7 +471,11 @@ export class ConcealerStream {
         this._sourceLevelTracker.update(cancelledX);
       }
       this._noiseLevelTracker.update(noiseBlock);
-      noiseLevelScale = this._sourceLevelTracker.getRms() / (this._noiseLevelTracker.getRms() + 1e-9);
+      const rawScale = this._sourceLevelTracker.getRms() / (this._noiseLevelTracker.getRms() + 1e-9);
+      // NOISE_LEVEL_EXPANSION_EXPONENT (see its own comment above) - only
+      // below 1.0, so a source louder than the noise's own level is passed
+      // through unchanged.
+      noiseLevelScale = rawScale >= 1 ? rawScale : Math.pow(rawScale, NOISE_LEVEL_EXPANSION_EXPONENT);
     }
 
     const playSum = new Float32Array(frames);
