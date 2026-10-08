@@ -196,7 +196,7 @@ function smoothnessToFadeDuration(rateStr) {
   return 0.05 + parseFloat(rateStr) * 0.075;
 }
 
-// "Speech-shaped sensitivity" (the SpeechShapedNoise background bed's own
+// "Envelope sensitivity" (the SpeechShapedNoise background bed's own
 // EMA time constant - see speech-shaped-noise.js's
 // SpeechShapedNoise.setSensitivitySeconds; only affects the speech-shaped
 // color specifically, unused by white/pink - NOT the same thing as the
@@ -742,7 +742,7 @@ async function ensureEngine() {
       // white/pink).
       noiseType: els.noiseTypeSelect.value,
       // The dedicated VAD used only to gate SpeechShapedNoise's calibration
-      // input behind "Speech-shaped purity" below (see stream.js's
+      // input behind "Envelope purity" below (see stream.js's
       // processChunk) - intentionally a SEPARATE dropdown/model instance
       // from "VAD" above (Concealer's own), same "never share a session"
       // reasoning as sourceVad/concealerVad (see worker-engine.js's init()).
@@ -755,11 +755,11 @@ async function ensureEngine() {
       // Generic "Purity" (every noise color, see level-tracker.js and
       // stream.js's processChunk) - 0 = level-tracking VAD gating off
       // entirely (the source level average updates unconditionally, the
-      // original/default behavior); separate from "Speech-shaped purity"
+      // original/default behavior); separate from "Envelope purity"
       // below, which only gates the speechShaped color's calibration input.
       noiseLevelPurity: purityToThreshold(els.noiseLevelPurity.value),
       concealingNoiseSensitivity: sensitivityToSeconds(els.concealingNoiseSensitivity.value),
-      // "Speech-shaped purity" (0-0.9, 0 = VAD gating off entirely - feed
+      // "Envelope purity" (0-0.9, 0 = VAD gating off entirely - feed
       // the noise generator unconditionally, the original/default
       // behavior) - only the speechShaped color's calibration input is
       // ever gated by this; white/pink ignore feed()'s content outright.
@@ -1677,12 +1677,12 @@ els.concealingNoisePurity.addEventListener('input', () => {
   if (worker && running) worker.postMessage({ type: 'setNoiseShapedPurity', value });
 });
 
-// Speech-shaped sensitivity/purity only apply to the speechShaped color -
+// Envelope sensitivity/purity only apply to the speechShaped color -
 // hidden (visibility, not display - see style.css's own comment) whenever
 // white/pink is selected, so the panel's height never changes and nothing
 // below it shifts when switching types. "VAD" (noiseVadType) is NOT in
 // this group despite configuring the same noiseVad instance that backs
-// "Speech-shaped purity" above - it also backs the generic "Purity"
+// "Envelope purity" above - it also backs the generic "Purity"
 // slider now, which applies to every color, so it stays visible always.
 function updateNoiseTypeDependentVisibility() {
   const isSpeechShaped = els.noiseTypeSelect.value === 'speechShaped';

@@ -67,7 +67,7 @@ export class ConcealerStream {
    * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_level_sensitivity_seconds, noise_level_purity, noise_type, noise_shaped_purity }
    * @param {SileroVAD} sourceVad - the real-time "is speech happening now" VAD (distinct from concealer.vad).
    * @param {GranSpeechMask} concealer
-   * @param {SileroVAD|TenVAD} noiseVad - dedicated VAD (own model instance, see worker-engine.js's init()) used only to gate SpeechShapedNoise's calibration input behind "Speech-shaped purity" below; constructed with logitThreshold: null so predict() returns the raw speech ratio, not a bool.
+   * @param {SileroVAD|TenVAD} noiseVad - dedicated VAD (own model instance, see worker-engine.js's init()) used only to gate SpeechShapedNoise's calibration input behind "Envelope purity" below; constructed with logitThreshold: null so predict() returns the raw speech ratio, not a bool.
    * @param {EchoCanceller|null} echoCanceller - "Speaker mode" (see echo-canceller.js's own header) - null while off, the exact original/default behavior.
    * @param {boolean} debug - debug.html's debugTelemetry flag; gates [STREAMDIAG] logging below (see worker-engine.js)
    */
@@ -106,7 +106,7 @@ export class ConcealerStream {
     this._noiseGen = this.noiseEnabled ? this._createNoiseGen(this.noiseType) : null;
 
     // "Sensitivity" (generic, common to every noise color - unlike
-    // "Speech-shaped sensitivity"/concealing_noise_sensitivity above, which
+    // "Envelope sensitivity"/concealing_noise_sensitivity above, which
     // only affects SpeechShapedNoise's own spectral envelope) - how
     // reactively the Noise bed's overall LEVEL follows the live source
     // signal's loudness over time. See level-tracker.js's own header for
@@ -322,7 +322,7 @@ export class ConcealerStream {
     // from GranSpeechMask's own pendingVoice/VAD/memory below. White/pink
     // noise ignore it (see noise-generators.js) but share the same call.
     //
-    // "Speech-shaped purity" (0-0.9) can further gate this for the
+    // "Envelope purity" (0-0.9) can further gate this for the
     // speechShaped color specifically: only audio that this.noiseVad - a
     // DEDICATED VAD, independent of sourceVad/concealer.vad, see its own
     // constructor param comment - rates above the live purity threshold is

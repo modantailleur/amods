@@ -85,7 +85,7 @@ async function init(cfg) {
   // real-time chunk loop; concealerVad in a burst from _feedMemory, which
   // runs fire-and-forget alongside that same loop - see updateMemory), and
   // noiseVad (the "Noise controls" panel's own "VAD" dropdown) gates
-  // SpeechShapedNoise's calibration input behind "Speech-shaped purity" -
+  // SpeechShapedNoise's calibration input behind "Envelope purity" -
   // see stream.js's processChunk. Sharing one onnxruntime-web
   // InferenceSession between two of these once silently corrupted sourceVad
   // the first time concealerVad ever ran - not worth risking again for any
@@ -119,7 +119,7 @@ async function init(cfg) {
       makeVad(cfg.vadType === 'silero' ? 'silero' : 'ten', { logitThreshold: cfg.concealerMemoryThreshold, sr: cfg.sr, name: 'concealer', debug: debugTelemetry }),
       // logitThreshold: null - predict() then returns the raw speech ratio
       // instead of a bool (see vad-ten.js's own contract comment).
-      // "Speech-shaped purity" is applied live from streamConfig in
+      // "Envelope purity" is applied live from streamConfig in
       // stream.js's processChunk instead of being baked in here, so the
       // live slider stays in sync with no separate setter needed to also
       // push the value into this instance.
@@ -196,7 +196,7 @@ async function init(cfg) {
     noise_enabled: cfg.noiseEnabled ?? false,
     // "Noise controls" panel's background bed - level (the "Noise level"
     // dB fader, see main.js's dbToMultiplier), the EMA time constant in
-    // seconds that the "Speech-shaped sensitivity" slider sets for the
+    // seconds that the "Envelope sensitivity" slider sets for the
     // speech-shaped color specifically (how far back its spectral envelope
     // remembers - NOT a buffer size, and unused by white/pink), and which
     // of the three colors (see noise-generators.js and speech-shaped-noise.js)
@@ -221,7 +221,7 @@ async function init(cfg) {
     // decaying toward zero. Live-tunable via 'setNoiseLevelPurity' below.
     noise_level_purity: cfg.noiseLevelPurity ?? 0,
     noise_type: cfg.noiseType ?? 'speechShaped',
-    // "Speech-shaped purity" slider (0-0.9) - 0 means the noiseVad gate in
+    // "Envelope purity" slider (0-0.9) - 0 means the noiseVad gate in
     // stream.js's processChunk is off entirely (feed the speechShaped
     // generator unconditionally, same as before this existed); above 0,
     // only audio whose noiseVad speech ratio exceeds this value is fed in.
@@ -572,7 +572,7 @@ self.onmessage = (event) => {
       if (stream) stream.streamConfig.concealing_noise_level = msg.value;
       break;
     case 'setConcealingNoiseSensitivity':
-      // The "Speech-shaped sensitivity" slider - the EMA time constant
+      // The "Envelope sensitivity" slider - the EMA time constant
       // (seconds, 0.2-10, clamped inside SpeechShapedNoise.setSensitivitySeconds)
       // that controls how far back the noise's spectral envelope remembers,
       // NOT a buffer size (see speech-shaped-noise.js's header for why) -
@@ -587,7 +587,7 @@ self.onmessage = (event) => {
       break;
     case 'setNoiseLevelSensitivity':
       // The generic "Sensitivity" slider (common to every noise color,
-      // unlike "Speech-shaped sensitivity" above) - the EMA time constant
+      // unlike "Envelope sensitivity" above) - the EMA time constant
       // (seconds, 1-60) level-tracker.js's two LevelTracker instances use
       // to decide how reactively the Noise bed's overall level follows the
       // live source signal's loudness (see stream.js's processChunk).
@@ -597,7 +597,7 @@ self.onmessage = (event) => {
       if (stream) stream.setNoiseLevelSensitivity(msg.value);
       break;
     case 'setNoiseShapedPurity':
-      // "Speech-shaped purity" slider - read fresh every chunk from
+      // "Envelope purity" slider - read fresh every chunk from
       // streamConfig inside stream.js's processChunk (see its own
       // comment), so a direct field update here is enough; no secondary
       // object needs to be told (unlike setConcealingNoiseSensitivity,
@@ -606,7 +606,7 @@ self.onmessage = (event) => {
       break;
     case 'setNoiseLevelPurity':
       // The generic "Purity" slider (common to every noise color, unlike
-      // "Speech-shaped purity" above) - same direct-field-update reasoning
+      // "Envelope purity" above) - same direct-field-update reasoning
       // as setNoiseShapedPurity: read fresh every chunk from streamConfig
       // inside stream.js's processChunk, no secondary object to update.
       if (stream) stream.streamConfig.noise_level_purity = msg.value;
