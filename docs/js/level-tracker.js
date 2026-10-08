@@ -95,7 +95,7 @@ export class LevelTracker {
    * is always accepted (so it keeps decaying freely toward whatever's
    * actually quiet, e.g. real silence/room noise once speech stops), while
    * a chunk that would push it UP is only accepted when speechDetected is
-   * true. This is "Purity"'s mechanism (see stream.js's processChunk) -
+   * true. This is "Voice focus"'s mechanism (see stream.js's processChunk) -
    * unlike an earlier version of this gate that simply froze the average
    * outright on non-speech chunks (which never let it fall at all, since
    * a frozen value never decays on its own), letting falls through

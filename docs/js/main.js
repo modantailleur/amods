@@ -752,7 +752,7 @@ async function ensureEngine() {
       // separate from concealingNoiseSensitivity below, which is the
       // speech-shaped-only spectral one.
       noiseLevelSensitivitySeconds: noiseLevelSensitivityToSeconds(els.noiseLevelSensitivity.value),
-      // Generic "Purity" (every noise color, see level-tracker.js and
+      // Generic "Voice focus" (every noise color, see level-tracker.js and
       // stream.js's processChunk) - 0 = level-tracking VAD gating off
       // entirely (the source level average updates unconditionally, the
       // original/default behavior); separate from "Envelope purity"
@@ -1682,7 +1682,7 @@ els.concealingNoisePurity.addEventListener('input', () => {
 // white/pink is selected, so the panel's height never changes and nothing
 // below it shifts when switching types. "VAD" (noiseVadType) is NOT in
 // this group despite configuring the same noiseVad instance that backs
-// "Envelope purity" above - it also backs the generic "Purity"
+// "Envelope purity" above - it also backs the generic "Voice focus"
 // slider now, which applies to every color, so it stays visible always.
 function updateNoiseTypeDependentVisibility() {
   const isSpeechShaped = els.noiseTypeSelect.value === 'speechShaped';

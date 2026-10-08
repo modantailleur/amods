@@ -211,7 +211,7 @@ async function init(cfg) {
     // decide how reactively its overall level follows the live source
     // signal's loudness. Live-tunable via 'setNoiseLevelSensitivity' below.
     noise_level_sensitivity_seconds: cfg.noiseLevelSensitivitySeconds ?? 30,
-    // "Purity" slider (0-0.9, generic - unlike noise_shaped_purity below,
+    // "Voice focus" slider (0-0.9, generic - unlike noise_shaped_purity below,
     // applies to every noise color) - 0 means the level-tracking gate in
     // stream.js's processChunk is off entirely (this._sourceLevelTracker
     // updates on every chunk, same as before this existed); above 0, only
@@ -605,7 +605,7 @@ self.onmessage = (event) => {
       if (stream) stream.streamConfig.noise_shaped_purity = msg.value;
       break;
     case 'setNoiseLevelPurity':
-      // The generic "Purity" slider (common to every noise color, unlike
+      // The generic "Voice focus" slider (common to every noise color, unlike
       // "Envelope purity" above) - same direct-field-update reasoning
       // as setNoiseShapedPurity: read fresh every chunk from streamConfig
       // inside stream.js's processChunk, no secondary object to update.

@@ -333,7 +333,7 @@ export class ConcealerStream {
     // White/pink ignore feed()'s content outright, so the gate is a no-op
     // for them regardless of this setting.
     //
-    // "Purity" (0-0.9, generic - see noise_level_purity below) shares this
+    // "Voice focus" (0-0.9, generic - see noise_level_purity below) shares this
     // same noiseVad call when it needs one too, so a chunk that both gates
     // care about only costs one inference, not two.
     const noiseShapedPurity = this.streamConfig.noise_shaped_purity ?? 0;
@@ -450,13 +450,13 @@ export class ConcealerStream {
     // this._noiseLevelTracker is always fed plainly (it's just establishing
     // the noise generator's own baseline output level, nothing to do with
     // voice activity). this._sourceLevelTracker is fed plainly too UNLESS
-    // "Purity" (0-0.9, noiseVadSpeechRatio/noiseLevelPurity above) is
+    // "Voice focus" (0-0.9, noiseVadSpeechRatio/noiseLevelPurity above) is
     // raised above 0: gatedMeanSquare's own gate is only relative to
     // whatever's loudest WITHIN each short window it's handed (see its own
     // comment in granspeechmask.js), so room/mic ambient noise alone - with
     // no absolute silence concept - keeps sourceRms from ever really
     // approaching the true floor and the noise bed never gets pulled down
-    // with it. Raising "Purity" fixes that via updateGated (see level-
+    // with it. Raising "Voice focus" fixes that via updateGated (see level-
     // tracker.js's own comment there): a chunk that would pull the level
     // DOWN is always let through (so it still decays on real silence), one
     // that would push it UP needs noiseVad's speechRatio above the live
