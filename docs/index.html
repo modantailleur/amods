@@ -105,6 +105,7 @@
             <option value="speechShaped" selected>Speech-shaped</option>
             <option value="white">White noise</option>
             <option value="pink">Pink noise</option>
+            <option value="water">Water flow</option>
           </select>
         </div>
         <div class="row">
@@ -123,6 +124,9 @@
           <label for="noise-level-purity">Voice focus</label>
           <input type="range" id="noise-level-purity" min="0" max="0.9" step="0.1" value="0" />
           <span id="noise-level-purity-value" class="value">0</span>
+        </div>
+        <div class="row noise-water-dependent">
+          <label><input type="checkbox" id="water-match-source-toggle" /> Match source</label>
         </div>
         <div class="row noise-type-dependent">
           <label for="concealing-noise-sensitivity">Envelope sensitivity</label>

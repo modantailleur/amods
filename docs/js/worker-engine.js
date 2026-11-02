@@ -220,6 +220,12 @@ async function init(cfg) {
     // tracked source level - and so the noise bed's own level - from
     // decaying toward zero. Live-tunable via 'setNoiseLevelPurity' below.
     noise_level_purity: cfg.noiseLevelPurity ?? 0,
+    // "Match source" checkbox - water color only (see stream.js's
+    // processChunk and water-noise-generator.js's own header) - pitch-
+    // shifts the water loop's playback rate so its spectral centroid
+    // tracks the live source's own. Live-tunable via 'setWaterMatchSource'
+    // below; a no-op while any other color is selected.
+    water_match_source: cfg.waterMatchSource ?? false,
     noise_type: cfg.noiseType ?? 'speechShaped',
     // "Envelope purity" slider (0-0.9) - 0 means the noiseVad gate in
     // stream.js's processChunk is off entirely (feed the speechShaped
@@ -610,6 +616,12 @@ self.onmessage = (event) => {
       // as setNoiseShapedPurity: read fresh every chunk from streamConfig
       // inside stream.js's processChunk, no secondary object to update.
       if (stream) stream.streamConfig.noise_level_purity = msg.value;
+      break;
+    case 'setWaterMatchSource':
+      // "Match source" checkbox (water color only) - same direct-field-
+      // update reasoning as setNoiseLevelPurity above: read fresh every
+      // chunk from streamConfig inside stream.js's processChunk.
+      if (stream) stream.streamConfig.water_match_source = msg.value;
       break;
     case 'setConcealingNoiseType':
       // "Noise controls" panel's color dropdown (speechShaped/white/pink

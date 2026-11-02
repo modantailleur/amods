@@ -5,6 +5,8 @@ import { limitPeak } from './audio-utils.js';
 import { SpeechShapedNoise } from './speech-shaped-noise.js';
 import { WhiteNoiseGenerator, PinkNoiseGenerator } from './noise-generators.js';
 import { LevelTracker } from './level-tracker.js';
+import { WaterNoiseGenerator, WATER_NATIVE_CENTROID_HZ } from './water-noise-generator.js';
+import { computeSpectralCentroid } from './spectral-centroid.js';
 
 // "Soft start" for the Concealer specifically while Speaker mode's
 // EchoCanceller is still converging (see echo-canceller.js's own header -
@@ -62,9 +64,20 @@ const CONCEALER_RAMP_START_FRACTION = 0.1; // only 1 in 10 opportunities let thr
 // (toward 1) to soften it back toward the plain ratio.
 const NOISE_LEVEL_EXPANSION_EXPONENT = 3;
 
+// "Match source" (water only, see this class's processChunk) - clamps how
+// far WaterNoiseGenerator's playback rate can be pulled from 1x (its
+// recorded pitch/centroid) toward matching the live source's tracked
+// centroid. A pure ratio with no clamp could, during a startup transient
+// or a spuriously extreme VAD/FFT reading, send the playback rate to
+// something degenerate; this just bounds it to a still-wide but sane
+// range (water's own centroid can move up to 3x higher or down to 0.3x
+// lower than its native ~3598Hz).
+const WATER_MATCH_SOURCE_MIN_RATIO = 0.3;
+const WATER_MATCH_SOURCE_MAX_RATIO = 3;
+
 export class ConcealerStream {
   /**
-   * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_level_sensitivity_seconds, noise_level_purity, noise_type, noise_shaped_purity }
+   * @param {object} streamConfig - { sr, channels_out, monitor_gain, record_mic_gain, conc_multiplier, concealing_noise_level, concealing_noise_sensitivity, noise_level_sensitivity_seconds, noise_level_purity, water_match_source, noise_type, noise_shaped_purity }
    * @param {SileroVAD} sourceVad - the real-time "is speech happening now" VAD (distinct from concealer.vad).
    * @param {GranSpeechMask} concealer
    * @param {SileroVAD|TenVAD} noiseVad - dedicated VAD (own model instance, see worker-engine.js's init()) used only to gate SpeechShapedNoise's calibration input behind "Envelope purity" below; constructed with logitThreshold: null so predict() returns the raw speech ratio, not a bool.
@@ -121,6 +134,17 @@ export class ConcealerStream {
       this._noiseLevelTracker.setTimeConstant(streamConfig.noise_level_sensitivity_seconds ?? 30);
     }
 
+    // "Match source" (water only - see this class's processChunk) - the
+    // live source's own spectral centroid (see spectral-centroid.js),
+    // smoothed by the SAME "Sensitivity" time constant/alpha as
+    // _sourceLevelTracker above (reused as asked, via that tracker's own
+    // emaAlpha, rather than adding a second dedicated slider for this).
+    // Starts at 0 (meaningless until the first real chunk) - harmless,
+    // since "Match source" also needs noiseType === 'water' to have any
+    // effect, and pitchRatio is clamped regardless (see
+    // WATER_MATCH_SOURCE_MIN_RATIO/MAX_RATIO above).
+    this._sourceCentroidSmoothed = 0;
+
     // Timing stats, mirrors Stream._record_callback_timing/pop_callback_timing.
     this._callbackMsSum = 0;
     this._callbackMsMax = 0;
@@ -165,6 +189,7 @@ export class ConcealerStream {
   _createNoiseGen(type) {
     if (type === 'white') return new WhiteNoiseGenerator(this.streamConfig.sr);
     if (type === 'pink') return new PinkNoiseGenerator(this.streamConfig.sr);
+    if (type === 'water') return new WaterNoiseGenerator(this.streamConfig.sr);
     return new SpeechShapedNoise(this.streamConfig.sr, this.streamConfig.concealing_noise_sensitivity ?? 2);
   }
 
@@ -185,6 +210,11 @@ export class ConcealerStream {
       this._sourceLevelTracker.setTimeConstant(seconds);
       this._noiseLevelTracker.setTimeConstant(seconds);
     }
+    // "Match source" (see this class's processChunk) - restart from a
+    // meaningless-but-harmless 0 for the same reason the trackers above
+    // get fresh instances, rather than carrying over a stale reading from
+    // a previous color/session.
+    this._sourceCentroidSmoothed = 0;
   }
 
   /** Live-updates the speech-shaped color's own EMA time constant - no-ops (just remembers the value for next activation) unless that color is both selected and currently instantiated. */
@@ -432,8 +462,29 @@ export class ConcealerStream {
     // multiplier, independent of conc_multiplier ("Concealer level") -
     // the two used to be tied together, but that's been explicitly
     // undone; each level fader now only affects its own section.
-    const noiseBlock = this._noiseGen ? this._noiseGen.nextBlock(frames) : null;
     const noiseGain = this.streamConfig.concealing_noise_level ?? 0;
+
+    // "Match source" (water only) - pitch-shifts WaterNoiseGenerator's
+    // playback rate so its spectral centroid tracks the live source's own
+    // (see WaterNoiseGenerator.nextBlock's own comment for why a rate
+    // change - not EQ/filtering - is what actually moves a centroid by a
+    // known, invertible amount: new centroid = native centroid * rate).
+    // Reuses the SAME "Sensitivity" alpha as _sourceLevelTracker below, as
+    // asked, rather than a second dedicated time constant - cheap to
+    // change later if that turns out to feel wrong once this is actually
+    // heard. The centroid itself is computed every chunk regardless of
+    // whether "Match source" is on (cheap relative to the VAD/denoiser
+    // work already happening here), continuously smoothed, so turning the
+    // toggle on mid-session doesn't start from a stale/zero reading.
+    if (this._sourceLevelTracker) {
+      this._sourceCentroidSmoothed += this._sourceLevelTracker.emaAlpha * (computeSpectralCentroid(cancelledX, this.streamConfig.sr) - this._sourceCentroidSmoothed);
+    }
+    let waterPitchRatio = 1;
+    if (this.noiseType === 'water' && this.streamConfig.water_match_source) {
+      const raw = this._sourceCentroidSmoothed / WATER_NATIVE_CENTROID_HZ;
+      waterPitchRatio = Math.min(WATER_MATCH_SOURCE_MAX_RATIO, Math.max(WATER_MATCH_SOURCE_MIN_RATIO, raw));
+    }
+    const noiseBlock = this._noiseGen ? this._noiseGen.nextBlock(frames, waterPitchRatio) : null;
 
     // "Sensitivity" (see level-tracker.js's own header) - scales noiseGain
     // dynamically so the noise bed's overall level follows the live source

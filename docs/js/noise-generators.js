@@ -21,10 +21,21 @@
 // applied on top of the 0.1 RMS calibration, same for both colors. Raise
 // it toward 0 for louder, more negative for quieter (every -6dB roughly
 // halves the amplitude; -20dB is a factor of 10 quieter).
-const NOISE_COLOR_TRIM_DB = -30;
+// Exported so water-noise-generator.js can calibrate the "Water flow"
+// color to the same ballpark loudness via the same trim, rather than
+// picking its own independent constant.
+export const NOISE_COLOR_TRIM_DB = -30;
+export const NOISE_COLOR_TARGET_RMS = 0.1; // the pre-trim RMS target every color is calibrated to
 const WHITE_CALIBRATED_SCALE = 0.17318; // native uniform-[-1,1] RMS (1/sqrt(3) ~= 0.577), calibrated to 0.1 RMS
 const PINK_CALIBRATED_SCALE = 0.05845; // native Kellet-filter RMS (no closed form), calibrated to 0.1 RMS
 const NOISE_COLOR_TRIM = 10 ** (NOISE_COLOR_TRIM_DB / 20);
+// Every color's known, calibrated native RMS (post-trim) - exported so
+// stream.js's "Sensitivity" level-following can compare the live source
+// against this fixed constant instead of measuring the noise generator's
+// own output, which only stays representative for stationary synthetic
+// noise (white/pink) and not for a real, dynamically-varying recording
+// (water) - see stream.js's own comment at its use site.
+export const NOISE_COLOR_REFERENCE_RMS = NOISE_COLOR_TARGET_RMS * NOISE_COLOR_TRIM;
 const WHITE_SCALE = WHITE_CALIBRATED_SCALE * NOISE_COLOR_TRIM;
 const PINK_SCALE = PINK_CALIBRATED_SCALE * NOISE_COLOR_TRIM;
 

@@ -83,6 +83,7 @@ const els = {
   noiseLevelSensitivityValue: document.getElementById('noise-level-sensitivity-value'),
   noiseLevelPurity: document.getElementById('noise-level-purity'),
   noiseLevelPurityValue: document.getElementById('noise-level-purity-value'),
+  waterMatchSourceToggle: document.getElementById('water-match-source-toggle'),
   concealingNoiseSensitivity: document.getElementById('concealing-noise-sensitivity'),
   concealingNoiseSensitivityValue: document.getElementById('concealing-noise-sensitivity-value'),
   concealingNoisePurity: document.getElementById('concealing-noise-purity'),
@@ -758,6 +759,10 @@ async function ensureEngine() {
       // original/default behavior); separate from "Envelope purity"
       // below, which only gates the speechShaped color's calibration input.
       noiseLevelPurity: purityToThreshold(els.noiseLevelPurity.value),
+      // "Match source" checkbox (water color only, see stream.js's
+      // processChunk and water-noise-generator.js) - pitch-shifts the
+      // water loop to track the live source's spectral centroid.
+      waterMatchSource: els.waterMatchSourceToggle.checked,
       concealingNoiseSensitivity: sensitivityToSeconds(els.concealingNoiseSensitivity.value),
       // "Envelope purity" (0-0.9, 0 = VAD gating off entirely - feed
       // the noise generator unconditionally, the original/default
@@ -1665,6 +1670,10 @@ els.noiseLevelPurity.addEventListener('input', () => {
   if (worker && running) worker.postMessage({ type: 'setNoiseLevelPurity', value });
 });
 
+els.waterMatchSourceToggle.addEventListener('change', () => {
+  if (worker && running) worker.postMessage({ type: 'setWaterMatchSource', value: els.waterMatchSourceToggle.checked });
+});
+
 els.concealingNoiseSensitivity.addEventListener('input', () => {
   const value = sensitivityToSeconds(els.concealingNoiseSensitivity.value);
   els.concealingNoiseSensitivityValue.textContent = els.concealingNoiseSensitivity.value;
@@ -1679,15 +1688,22 @@ els.concealingNoisePurity.addEventListener('input', () => {
 
 // Envelope sensitivity/purity only apply to the speechShaped color -
 // hidden (visibility, not display - see style.css's own comment) whenever
-// white/pink is selected, so the panel's height never changes and nothing
-// below it shifts when switching types. "VAD" (noiseVadType) is NOT in
-// this group despite configuring the same noiseVad instance that backs
-// "Envelope purity" above - it also backs the generic "Voice focus"
+// white/pink/water is selected, so the panel's height never changes and
+// nothing below it shifts when switching types. "VAD" (noiseVadType) is
+// NOT in this group despite configuring the same noiseVad instance that
+// backs "Envelope purity" above - it also backs the generic "Voice focus"
 // slider now, which applies to every color, so it stays visible always.
+// ".noise-water-dependent" is the mirror image - "Match source" only
+// applies to the water color, hidden for every other one.
 function updateNoiseTypeDependentVisibility() {
-  const isSpeechShaped = els.noiseTypeSelect.value === 'speechShaped';
+  const noiseType = els.noiseTypeSelect.value;
+  const isSpeechShaped = noiseType === 'speechShaped';
+  const isWater = noiseType === 'water';
   document.querySelectorAll('.noise-type-dependent').forEach((row) => {
     row.classList.toggle('is-hidden', !isSpeechShaped);
+  });
+  document.querySelectorAll('.noise-water-dependent').forEach((row) => {
+    row.classList.toggle('is-hidden', !isWater);
   });
 }
 updateNoiseTypeDependentVisibility();
