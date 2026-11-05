@@ -36,4 +36,10 @@ export const RECORDED_NOISE_COLORS = {
     loopCrossfadeSeconds: 15,
     nativeCentroidHz: 1150.185107041403,
   },
+  rain: {
+    label: 'Rain',
+    audioPath: '../audios/rain.wav',
+    loopCrossfadeSeconds: 15,
+    nativeCentroidHz: 6925.701545305518,
+  },
 };

@@ -36,3 +36,13 @@ Reproduction: `ffmpeg -i <original file> -vn -ac 1 -ar 48000 -acodec pcm_s16le -
 - **Modification made here**: 50s rendered (dry bubbles convolved with the church IR, dry/wet mixed 0.55/0.45), trimmed to the 5s-45s range (40s), mono 16-bit PCM @ 48kHz - same convention as the other two files here.
 - **Used by**: the "Bubbles" noise color, registered in `docs/js/recorded-noise-colors.js`.
 - **Spectral centroid**: 1150.185107041403 Hz (same magnitude-weighted whole-clip FFT definition as above), stored as this color's `nativeCentroidHz` in `recorded-noise-colors.js`.
+
+## rain.wav
+
+- **Source**: ["Rain on Plastic Roof.WAV"](https://freesound.org/people/gynation/sounds/82367/) by [gynation](https://freesound.org/people/gynation/) on Freesound
+- **License**: [Creative Commons Attribution-NonCommercial 4.0](https://creativecommons.org/licenses/by-nc/4.0/) (CC BY-NC 4.0) - **non-commercial use only**, unlike every other file in this document (all CC BY or CC0, commercial use permitted). If this project is ever used commercially, this file needs replacing or separate clearance first.
+- **Modification made here**: trimmed to the 2s-42s range (40s) of the original ~59.7s recording, downmixed to mono, highpass-filtered (`highpass=f=200:poles=2`, removing low-frequency rumble - the raw recording had a broadband low-end hump rather than a narrow hum, but the same "cut the low end" request applied), peak-limited (`alimiter=limit=0.95`, the raw file had inter-sample peaks above 0dBFS), re-encoded to 16-bit PCM @ 48kHz.
+- **Used by**: the "Rain" noise color, registered in `docs/js/recorded-noise-colors.js`.
+- **Spectral centroid**: 6925.701545305518 Hz (same magnitude-weighted whole-clip FFT definition as above, computed after the highpass filter - the filter itself changes this value, unlike amplitude calibration, so this was measured on the final processed file, not the raw one).
+
+Reproduction: `ffmpeg -i <original file> -ss 2 -to 42 -ac 1 -ar 48000 -af "highpass=f=200:poles=2,alimiter=limit=0.95:level=disabled" -acodec pcm_s16le -map_metadata -1 rain.wav`, then the same centroid snippet as above on the resulting file's samples.
