@@ -246,12 +246,13 @@ h1 {
 /* VAD/Sensitivity/Speech-shaped purity rows only apply to the
    speech-shaped noise color - hidden (not removed - visibility, not
    display, so the row keeps its layout space) whenever "Type" is set to
-   white/pink/water, so switching types never shifts anything below the
-   panel ("teleporting" text) despite the varying number of visible rows.
-   .noise-water-dependent is the mirror image - "Match source" only
-   applies to the water color - same reasoning/treatment. */
+   white/pink/water/fxWater, so switching types never shifts anything
+   below the panel ("teleporting" text) despite the varying number of
+   visible rows. .noise-recorded-dependent is the mirror image - "Match
+   source" only applies to a color backed by a real recording (water/
+   fxWater) - same reasoning/treatment. */
 .noise-type-dependent.is-hidden,
-.noise-water-dependent.is-hidden {
+.noise-recorded-dependent.is-hidden {
   visibility: hidden;
 }
 

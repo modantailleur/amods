@@ -1,14 +1,13 @@
-// A real recorded flowing-water clip, looped, as a fourth "Noise controls"
-// color alongside the synthesized white/pink generators in
-// noise-generators.js. Several purely-synthesized attempts (resonant
-// filters, then FFT-shaped noise + sparse bursts, then dense overlapping
-// grains) were tried and rejected by ear (sounded like wind, then rain) -
-// a real recording is simply used instead. See docs/audios/CREDITS.md for
-// the clip's source/license (CC BY 4.0 - requires attribution) and the
-// exact trim applied.
+// Shared machinery for looping a real recorded clip as a "Noise controls"
+// color - factored out once a SECOND real recording (fx_water.wav)
+// needed the exact same WAV-parsing/crossfade-loop/calibration/variable-
+// rate-playback logic water_flow.wav already had (see
+// water-noise-generator.js/fx-water-noise-generator.js, both now thin
+// wrappers around RecordedNoiseGenerator below, and docs/audios/CREDITS.md
+// for both clips' source/license).
 //
 // Shares WhiteNoiseGenerator/PinkNoiseGenerator's { reset(), feed(),
-// nextBlock(frames) } interface so stream.js can hold/swap all four
+// nextBlock(frames) } interface so stream.js can hold/swap every color
 // uniformly - feed() is a no-op here too, same reasoning (no relationship
 // to the live mic). nextBlock takes an extra optional pitchRatio argument
 // white/pink don't have (see its own comment) - stream.js always passes
@@ -20,47 +19,26 @@
 // works fine in a Worker (where this runs, same as the rest of
 // stream.js's world), but AudioContext.decodeAudioData does not exist
 // there, so the WAV is parsed by hand below. That's only reasonable
-// because WATER_AUDIO_PATH is a file this project controls the exact
-// shape of (plain 16-bit PCM, see CREDITS.md's ffmpeg command) - this is
-// not a general-purpose WAV decoder.
+// because every audioPath this is given is a file this project controls
+// the exact shape of (plain 16-bit PCM, see CREDITS.md's ffmpeg commands)
+// - this is not a general-purpose WAV decoder.
 //
 // Loading is async (fetch + parse) but nextBlock() is called synchronously
 // from stream.js's processChunk, same as white/pink - so nextBlock just
 // returns silence until the shared load finishes, then starts looping.
-// The load is cached at module scope (by sample rate) so switching the
-// noise-type dropdown back and forth, or disabling/re-enabling Noise,
-// never re-fetches or re-parses the file more than once per sample rate.
+// The load is cached at module scope (by audioPath + sample rate) so
+// switching the noise-type dropdown back and forth, or disabling/
+// re-enabling Noise, never re-fetches or re-parses a given file more than
+// once per sample rate.
 import { resampleLinear } from './resample.js';
 import { NOISE_COLOR_REFERENCE_RMS } from './noise-generators.js';
 
-const WATER_AUDIO_PATH = '../audios/water_flow.wav';
-// The clip doesn't loop seamlessly on its own (start/end don't match) - its
-// own tail is equal-power-crossfaded into its own head instead, same ramp
-// shape as speech-shaped-noise.js's own segment crossfade
-// (sin(pi/2*t)/cos(pi/2*t)), so reading it as a circular buffer has no
-// audible seam. 15s is a deliberately LONG crossfade (vs. that module's
-// much shorter one) - this is 40s of continuous texture, not discrete
-// segments, so there's plenty of material to blend across without it
-// reading as its own distinct "event".
-const WATER_LOOP_CROSSFADE_SECONDS = 15;
+const sharedBufferPromises = new Map(); // `${audioPath}@${sr}` -> Promise<Float32Array>
 
-// The clip's own magnitude-weighted spectral centroid (see
-// spectral-centroid.js's own header for the exact definition), computed
-// ONCE offline on the raw water_flow.wav samples (amplitude calibration
-// doesn't change it - a pure gain scale preserves every frequency's
-// relative weight) and hardcoded here rather than recomputed at runtime -
-// see docs/audios/CREDITS.md for the exact reproduction steps/command.
-// Used by "Match source" (stream.js's processChunk) as the reference this
-// color's playback rate is shifted away from to match the live source's
-// own tracked centroid.
-export const WATER_NATIVE_CENTROID_HZ = 3597.9678237838875;
-
-const sharedBufferPromises = new Map(); // sr -> Promise<Float32Array>
-
-function parseWavMono16(arrayBuffer) {
+function parseWavMono16(arrayBuffer, audioPath) {
   const view = new DataView(arrayBuffer);
   if (view.getUint32(0, false) !== 0x52494646 || view.getUint32(8, false) !== 0x57415645) {
-    throw new Error('water_flow.wav: not a RIFF/WAVE file');
+    throw new Error(`${audioPath}: not a RIFF/WAVE file`);
   }
   let offset = 12;
   let sampleRate = null, numChannels = null, bitsPerSample = null, dataOffset = null, dataLength = null;
@@ -78,8 +56,8 @@ function parseWavMono16(arrayBuffer) {
     }
     offset = chunkStart + chunkSize + (chunkSize % 2); // chunks are word-aligned
   }
-  if (dataOffset === null || sampleRate === null) throw new Error('water_flow.wav: missing fmt/data chunk');
-  if (bitsPerSample !== 16) throw new Error(`water_flow.wav: unsupported bit depth ${bitsPerSample} (expected 16)`);
+  if (dataOffset === null || sampleRate === null) throw new Error(`${audioPath}: missing fmt/data chunk`);
+  if (bitsPerSample !== 16) throw new Error(`${audioPath}: unsupported bit depth ${bitsPerSample} (expected 16)`);
   const bytesPerSample = 2 * numChannels;
   const nFrames = Math.floor(dataLength / bytesPerSample);
   const mono = new Float32Array(nFrames);
@@ -127,25 +105,28 @@ function calibrate(buffer) {
   return out;
 }
 
-async function loadSharedBuffer(targetSr) {
-  const response = await fetch(WATER_AUDIO_PATH);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText} (${WATER_AUDIO_PATH})`);
+async function loadSharedBuffer(audioPath, targetSr, loopCrossfadeSeconds) {
+  const response = await fetch(audioPath);
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText} (${audioPath})`);
   const arrayBuffer = await response.arrayBuffer();
-  const { samples, sampleRate } = parseWavMono16(arrayBuffer);
+  const { samples, sampleRate } = parseWavMono16(arrayBuffer, audioPath);
   const resampled = sampleRate === targetSr ? samples : resampleLinear(samples, sampleRate, targetSr);
-  const looped = buildLoopBuffer(resampled, Math.round(WATER_LOOP_CROSSFADE_SECONDS * targetSr));
+  const looped = buildLoopBuffer(resampled, Math.round(loopCrossfadeSeconds * targetSr));
   return calibrate(looped);
 }
 
-export class WaterNoiseGenerator {
-  constructor(sr) {
+export class RecordedNoiseGenerator {
+  /** @param {object} opts - { audioPath, loopCrossfadeSeconds } */
+  constructor(sr, { audioPath, loopCrossfadeSeconds }) {
     this.sr = sr;
+    this.audioPath = audioPath;
     this.readPos = 0; // fractional (float) - see nextBlock's own comment for why
     this.buffer = null; // stays null (nextBlock returns silence) until the shared load resolves
-    if (!sharedBufferPromises.has(sr)) sharedBufferPromises.set(sr, loadSharedBuffer(sr));
-    sharedBufferPromises.get(sr)
+    const key = `${audioPath}@${sr}`;
+    if (!sharedBufferPromises.has(key)) sharedBufferPromises.set(key, loadSharedBuffer(audioPath, sr, loopCrossfadeSeconds));
+    sharedBufferPromises.get(key)
       .then((buf) => { this.buffer = buf; })
-      .catch((e) => console.error('[WaterNoiseGenerator] failed to load water_flow.wav', e));
+      .catch((e) => console.error(`[RecordedNoiseGenerator] failed to load ${audioPath}`, e));
   }
 
   reset() {

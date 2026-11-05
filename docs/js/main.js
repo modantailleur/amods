@@ -12,6 +12,7 @@ import { applyFade } from './audio-utils.js';
 import { DENOISER_MODEL_PATHS } from './denoiser-models.js';
 import { installDebugLogRelay } from './debug-log.js';
 import { SpectrogramView } from './spectrogram.js';
+import { RECORDED_NOISE_COLORS } from './recorded-noise-colors.js';
 
 // Set by debug.html (never by index.html) before this module loads. Gates
 // every debug-only feature below so the production page never wires any of
@@ -83,7 +84,7 @@ const els = {
   noiseLevelSensitivityValue: document.getElementById('noise-level-sensitivity-value'),
   noiseLevelPurity: document.getElementById('noise-level-purity'),
   noiseLevelPurityValue: document.getElementById('noise-level-purity-value'),
-  waterMatchSourceToggle: document.getElementById('water-match-source-toggle'),
+  matchSourceToggle: document.getElementById('match-source-toggle'),
   concealingNoiseSensitivity: document.getElementById('concealing-noise-sensitivity'),
   concealingNoiseSensitivityValue: document.getElementById('concealing-noise-sensitivity-value'),
   concealingNoisePurity: document.getElementById('concealing-noise-purity'),
@@ -759,10 +760,10 @@ async function ensureEngine() {
       // original/default behavior); separate from "Envelope purity"
       // below, which only gates the speechShaped color's calibration input.
       noiseLevelPurity: purityToThreshold(els.noiseLevelPurity.value),
-      // "Match source" checkbox (water color only, see stream.js's
-      // processChunk and water-noise-generator.js) - pitch-shifts the
-      // water loop to track the live source's spectral centroid.
-      waterMatchSource: els.waterMatchSourceToggle.checked,
+      // "Match source" checkbox (recorded colors only - water/fxWater,
+      // see stream.js's processChunk) - pitch-shifts the active recorded
+      // loop to track the live source's spectral centroid.
+      matchSource: els.matchSourceToggle.checked,
       concealingNoiseSensitivity: sensitivityToSeconds(els.concealingNoiseSensitivity.value),
       // "Envelope purity" (0-0.9, 0 = VAD gating off entirely - feed
       // the noise generator unconditionally, the original/default
@@ -1670,8 +1671,8 @@ els.noiseLevelPurity.addEventListener('input', () => {
   if (worker && running) worker.postMessage({ type: 'setNoiseLevelPurity', value });
 });
 
-els.waterMatchSourceToggle.addEventListener('change', () => {
-  if (worker && running) worker.postMessage({ type: 'setWaterMatchSource', value: els.waterMatchSourceToggle.checked });
+els.matchSourceToggle.addEventListener('change', () => {
+  if (worker && running) worker.postMessage({ type: 'setMatchSource', value: els.matchSourceToggle.checked });
 });
 
 els.concealingNoiseSensitivity.addEventListener('input', () => {
@@ -1693,19 +1694,33 @@ els.concealingNoisePurity.addEventListener('input', () => {
 // NOT in this group despite configuring the same noiseVad instance that
 // backs "Envelope purity" above - it also backs the generic "Voice focus"
 // slider now, which applies to every color, so it stays visible always.
-// ".noise-water-dependent" is the mirror image - "Match source" only
-// applies to the water color, hidden for every other one.
+// ".noise-recorded-dependent" is the mirror image - "Match source" only
+// applies to a color backed by a real recording (any entry in
+// RECORDED_NOISE_COLORS, see recorded-noise-colors.js and stream.js's own
+// use of that same registry), hidden for every other (synthesized) color.
 function updateNoiseTypeDependentVisibility() {
   const noiseType = els.noiseTypeSelect.value;
   const isSpeechShaped = noiseType === 'speechShaped';
-  const isWater = noiseType === 'water';
+  const isRecorded = Boolean(RECORDED_NOISE_COLORS[noiseType]);
   document.querySelectorAll('.noise-type-dependent').forEach((row) => {
     row.classList.toggle('is-hidden', !isSpeechShaped);
   });
-  document.querySelectorAll('.noise-water-dependent').forEach((row) => {
-    row.classList.toggle('is-hidden', !isWater);
+  document.querySelectorAll('.noise-recorded-dependent').forEach((row) => {
+    row.classList.toggle('is-hidden', !isRecorded);
   });
 }
+
+// Every RECORDED_NOISE_COLORS entry gets its own <option>, injected here
+// rather than hardcoded in index.html/debug.html - adding a new recorded
+// color (water, fxWater, bubbles, or a future one) is then purely a
+// registry entry, no HTML edit needed.
+for (const [value, { label }] of Object.entries(RECORDED_NOISE_COLORS)) {
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = label;
+  els.noiseTypeSelect.appendChild(option);
+}
+
 updateNoiseTypeDependentVisibility();
 
 els.noiseTypeSelect.addEventListener('change', () => {
